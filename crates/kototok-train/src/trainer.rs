@@ -134,6 +134,10 @@ struct Trainer {
     heap: Heap,
     /// BEG: two-sided gate tables for `Kanji -> Hiragana` merge scoring.
     beg: crate::beg::BegTables,
+    /// Phase-2 vocabulary budget (set at `run_phase2` entry) and the count
+    /// of pure-ASCII merges already spent from it.
+    phase2_budget: usize,
+    phase2_ascii_merges: usize,
 }
 
 impl Trainer {
@@ -156,6 +160,8 @@ impl Trainer {
             pair_to_words: FxHashMap::default(),
             sym_to_words: vec![FxHashSet::default(); n],
             sym_counts: vec![0; n],
+            phase2_budget: 0,
+            phase2_ascii_merges: 0,
             beg: crate::beg::BegTables {
                 suffix: FxHashMap::default(),
                 hira: FxHashMap::default(),
@@ -198,6 +204,8 @@ impl Trainer {
     }
 
     fn run_phase2(&mut self, counts: &CorpusCounts) -> Result<(), TrainError> {
+        self.phase2_budget = self.cfg.vocab_size.saturating_sub(self.alive_vocab_count);
+        self.phase2_ascii_merges = 0;
         // Compile a temporary Phase-1-only tokenizer to encode every unique
         // chunk to internal ids (parallel over the deduplicated table).
         let mut toks = self.tokens.clone();
@@ -431,11 +439,43 @@ impl Trainer {
         if f < self.cfg.min_pair_freq {
             return;
         }
-        if phase == Phase::Two && self.npmi(f, l, r) < self.cfg.phase2_min_npmi {
-            return;
+        if phase == Phase::Two {
+            if self.npmi(f, l, r) < self.phase2_npmi_floor(l, r) {
+                return;
+            }
+            if self.is_ascii_pair(l, r) && self.phase2_ascii_quota_reached() {
+                return;
+            }
         }
         let s = self.score(l, r, f, phase);
         self.heap.push((Score(s), Reverse((l, r))));
+    }
+
+    /// Class-scoped Phase-2 NPMI floor: pairs made entirely of ASCII bytes
+    /// (pure-Latin superwords) may merge at `phase2_min_npmi_ascii`, buying
+    /// English compression without touching any JA-script boundary. UTF-8
+    /// guarantees JA-script bytes are all >= 0x80, so an ASCII byte scan
+    /// decides the class.
+    fn phase2_npmi_floor(&self, l: u32, r: u32) -> f64 {
+        if self.is_ascii_pair(l, r) {
+            self.cfg.phase2_min_npmi_ascii
+        } else {
+            self.cfg.phase2_min_npmi
+        }
+    }
+
+    fn is_ascii_pair(&self, l: u32, r: u32) -> bool {
+        self.tokens[l as usize].bytes.iter().all(|b| b.is_ascii())
+            && self.tokens[r as usize].bytes.iter().all(|b| b.is_ascii())
+    }
+
+    /// Whether the ASCII share of the Phase-2 budget is exhausted. A quota
+    /// keeps cheap Latin superwords from crowding out JA Phase-2 merges in
+    /// a fixed-size vocabulary.
+    fn phase2_ascii_quota_reached(&self) -> bool {
+        self.cfg.phase2_ascii_quota < 1.0
+            && self.phase2_ascii_merges
+                >= (self.phase2_budget as f64 * self.cfg.phase2_ascii_quota) as usize
     }
 
     /// NPMI of pair `(l, r)` against current symbol counts and `total_pairs`.
@@ -487,7 +527,32 @@ impl Trainer {
                     f_ab as f64 * npmi.powf(exp)
                 }
             }
-            Phase::Two => f_ab as f64 * (1.0 + self.npmi(f_ab, l, r)),
+            Phase::Two => {
+                let npmi = self.npmi(f_ab, l, r);
+                let mut score = f_ab as f64 * (1.0 + npmi);
+                // BEG on soft-boundary superwords uses only the RIGHT-side
+                // gate (is the right operand a particle-like Hiragana run?).
+                // Phase-1 may split stem+okurigana (e.g. (食)|(べる)) on a
+                // shared inflection; Phase-2 superwords are what rejoin them,
+                // so an inflectional right side must stay cheap to merge.
+                // Noun+particle pairs (日本|の) are caught because particles
+                // carry gate_R ~1 regardless of the left operand.
+                if self.cfg.beg_strength > 0.0
+                    && self.cfg.beg_phase2
+                    && is_kanji_to_hiragana_cross(
+                        &self.tokens[l as usize].bytes,
+                        &self.tokens[r as usize].bytes,
+                    )
+                {
+                    let hira = crate::beg::leading_hiragana_run(&self.tokens[r as usize].bytes);
+                    let g_r = self.beg.hira.get(hira).copied().unwrap_or(0.0);
+                    let exp = self.cfg.beg_strength * g_r;
+                    if exp > 0.0 {
+                        score *= npmi.clamp(0.01, 1.0).powf(exp);
+                    }
+                }
+                score
+            }
         }
     }
 
@@ -516,13 +581,21 @@ impl Trainer {
                 self.heap.push((Score(exact), Reverse((l, r))));
                 continue;
             }
-            if phase == Phase::Two && self.npmi(f_ab, l, r) < self.cfg.phase2_min_npmi {
-                continue;
+            if phase == Phase::Two {
+                if self.npmi(f_ab, l, r) < self.phase2_npmi_floor(l, r) {
+                    continue;
+                }
+                if self.is_ascii_pair(l, r) && self.phase2_ascii_quota_reached() {
+                    continue;
+                }
             }
 
             // IoS uses pre-merge symbol frequencies.
             let ios_l = f_ab as f64 / self.sym_counts[l as usize].max(1) as f64;
             let ios_r = f_ab as f64 / self.sym_counts[r as usize].max(1) as f64;
+            if phase == Phase::Two && self.is_ascii_pair(l, r) {
+                self.phase2_ascii_merges += 1;
+            }
             self.do_merge(l, r, phase);
 
             if phase == Phase::One && self.cfg.picky_enabled {

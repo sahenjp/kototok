@@ -21,6 +21,7 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Train a tokenizer model on a UTF-8 corpus.
     Train {
@@ -51,6 +52,12 @@ enum Command {
         /// Override Phase-2 minimum NPMI.
         #[arg(long)]
         phase2_min_npmi: Option<f64>,
+        /// Override Phase-2 minimum NPMI for pure-ASCII pairs.
+        #[arg(long)]
+        phase2_min_npmi_ascii: Option<f64>,
+        /// Override the pure-ASCII share of the Phase-2 vocab budget.
+        #[arg(long)]
+        phase2_ascii_quota: Option<f64>,
         /// Override minimum char frequency for `AtomicChar`.
         #[arg(long)]
         min_char_freq: Option<u64>,
@@ -72,6 +79,9 @@ enum Command {
         /// BEG ln(prefix count) above which a Hiragana run counts as particle.
         #[arg(long)]
         beg_particle_hi: Option<f64>,
+        /// Apply the BEG gate to Phase-2 merges too (default on, `0` disables).
+        #[arg(long)]
+        beg_phase2: Option<u8>,
         /// Rayon worker threads (0 = default pool size).
         #[arg(long)]
         threads: Option<usize>,
@@ -165,6 +175,8 @@ fn run() -> Result<(), DynError> {
             picky_threshold,
             phase1_ratio,
             phase2_min_npmi,
+            phase2_min_npmi_ascii,
+            phase2_ascii_quota,
             min_char_freq,
             min_pair_freq,
             beg_strength,
@@ -172,6 +184,7 @@ fn run() -> Result<(), DynError> {
             beg_noun_min,
             beg_particle_lo,
             beg_particle_hi,
+            beg_phase2,
             threads,
         } => {
             if let Some(t) = threads
@@ -197,6 +210,12 @@ fn run() -> Result<(), DynError> {
             if let Some(v) = phase2_min_npmi {
                 cfg.phase2_min_npmi = v;
             }
+            if let Some(v) = phase2_min_npmi_ascii {
+                cfg.phase2_min_npmi_ascii = v;
+            }
+            if let Some(v) = phase2_ascii_quota {
+                cfg.phase2_ascii_quota = v;
+            }
             if let Some(v) = min_char_freq {
                 cfg.min_char_freq = v;
             }
@@ -217,6 +236,9 @@ fn run() -> Result<(), DynError> {
             }
             if let Some(v) = beg_particle_hi {
                 cfg.beg_particle_hi = v;
+            }
+            if let Some(v) = beg_phase2 {
+                cfg.beg_phase2 = v != 0;
             }
             let model = train(&corpus, &cfg)?;
             model.save_binary(&output)?;
