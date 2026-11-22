@@ -30,6 +30,22 @@ pub struct TrainConfig {
     pub phase1_vocab_ratio: f64,
     /// Minimum NPMI a Phase-2 candidate pair must reach.
     pub phase2_min_npmi: f64,
+    /// BEG strength: maximum NPMI exponent applied to `Kanji -> Hiragana`
+    /// merges whose left Kanji run is a high-entropy (complete-noun) prefix.
+    /// `0.0` disables the gate entirely.
+    pub beg_strength: f64,
+    /// Right-branching entropy (nats) at/below which the Kanji run is treated
+    /// as an inflectional stem -> merge free of penalty.
+    pub beg_stem_max: f64,
+    /// Right-branching entropy (nats) at/above which the Kanji run is treated
+    /// as a complete noun -> full `beg_strength` penalty.
+    pub beg_noun_min: f64,
+    /// ln(#distinct Kanji prefixes) below which a Hiragana run counts as an
+    /// inflectional continuation -> no extra penalty.
+    pub beg_particle_lo: f64,
+    /// ln(#distinct Kanji prefixes) above which a Hiragana run counts as a
+    /// particle -> full `beg_strength` penalty.
+    pub beg_particle_hi: f64,
     /// Extra never-mergeable special tokens appended after the byte entries.
     pub special_tokens: Vec<String>,
 }
@@ -104,8 +120,13 @@ impl TrainPreset {
             picky_enabled: matches!(self, Self::AsymFull | Self::AsymNoPhase2 | Self::AsymNoAcsg),
             picky_ios_threshold: 0.90,
             phase2_enabled: matches!(self, Self::AsymFull | Self::AsymNoPicky | Self::AsymNoAcsg),
-            phase1_vocab_ratio: 0.85,
-            phase2_min_npmi: 0.25,
+            phase1_vocab_ratio: if self == Self::AsymFull { 0.75 } else { 0.85 },
+            phase2_min_npmi: if self == Self::AsymFull { 0.45 } else { 0.25 },
+            beg_strength: if self == Self::AsymFull { 3.0 } else { 0.0 },
+            beg_stem_max: 0.7,
+            beg_noun_min: 1.8,
+            beg_particle_lo: 6.0,
+            beg_particle_hi: 9.0,
             special_tokens: Vec::new(),
         }
     }

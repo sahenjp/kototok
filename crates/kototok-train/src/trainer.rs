@@ -40,6 +40,32 @@ pub fn train(corpus: &str, cfg: &TrainConfig) -> Result<Model, TrainError> {
     let counts = count_corpus(corpus, cfg);
     let (tokens, char_to_id) = init_tokens(cfg, &counts.char_counts)?;
     let mut trainer = Trainer::new(cfg.clone(), tokens, char_to_id);
+    if cfg.beg_strength > 0.0 {
+        trainer.beg = crate::beg::build_beg_scores(
+            &counts,
+            cfg.beg_stem_max,
+            cfg.beg_noun_min,
+            cfg.beg_particle_lo,
+            cfg.beg_particle_hi,
+        );
+        if std::env::var_os("KOTOTOK_BEG_DEBUG").is_some() {
+            let mut v: Vec<_> = trainer.beg.suffix.iter().collect();
+            v.sort_by(|a, b| a.1.total_cmp(b.1));
+            eprintln!("[beg] {} suffix keys", v.len());
+            for (k, g) in v.iter().take(15) {
+                eprintln!("[beg-lo ] {g:>5.3}  {:?}", String::from_utf8_lossy(k));
+            }
+            for (k, g) in v.iter().rev().take(15) {
+                eprintln!("[beg-hi ] {g:>5.3}  {:?}", String::from_utf8_lossy(k));
+            }
+            let mut h: Vec<_> = trainer.beg.hira.iter().collect();
+            h.sort_by(|a, b| a.1.total_cmp(b.1));
+            eprintln!("[beg] {} hira keys", h.len());
+            for (k, g) in h.iter().rev().take(20) {
+                eprintln!("[beg-hira] {g:>5.3}  {:?}", String::from_utf8_lossy(k));
+            }
+        }
+    }
     trainer.run(&counts)?;
     Ok(trainer.finalize())
 }
@@ -106,6 +132,8 @@ struct Trainer {
     sym_counts: Vec<u64>,
     total_pairs: u64,
     heap: Heap,
+    /// BEG: two-sided gate tables for `Kanji -> Hiragana` merge scoring.
+    beg: crate::beg::BegTables,
 }
 
 impl Trainer {
@@ -128,6 +156,10 @@ impl Trainer {
             pair_to_words: FxHashMap::default(),
             sym_to_words: vec![FxHashSet::default(); n],
             sym_counts: vec![0; n],
+            beg: crate::beg::BegTables {
+                suffix: FxHashMap::default(),
+                hira: FxHashMap::default(),
+            },
             total_pairs: 0,
             heap: BinaryHeap::new(),
         }
@@ -422,19 +454,37 @@ impl Trainer {
         pmi / -(f_ab as f64 / t as f64).ln()
     }
 
+    /// BEG gate = `max(left-noun-gate, right-particle-gate)`: `0.0` lets the
+    /// pair merge freely (stem + okurigana), `1.0` applies the full penalty
+    /// (noun + particle). Unknown kanji suffixes default to noun.
+    fn beg_gate(&self, l_bytes: &[u8], r_bytes: &[u8]) -> f64 {
+        let suffix = crate::beg::trailing_kanji_run(l_bytes);
+        let g_l = self.beg.suffix.get(suffix).copied().unwrap_or(1.0);
+        let hira = crate::beg::leading_hiragana_run(r_bytes);
+        let g_r = self.beg.hira.get(hira).copied().unwrap_or(0.0);
+        g_l.max(g_r)
+    }
+
     fn score(&self, l: u32, r: u32, f_ab: u64, phase: Phase) -> f64 {
         match phase {
             Phase::One => {
-                if self.cfg.acsg_npmi_beta > 0.0
-                    && is_kanji_to_hiragana_cross(
-                        &self.tokens[l as usize].bytes,
-                        &self.tokens[r as usize].bytes,
-                    )
-                {
-                    let npmi = self.npmi(f_ab, l, r).clamp(0.01, 1.0);
-                    f_ab as f64 * npmi.powf(self.cfg.acsg_npmi_beta)
+                let lb = &self.tokens[l as usize].bytes;
+                let rb = &self.tokens[r as usize].bytes;
+                if !is_kanji_to_hiragana_cross(lb, rb) {
+                    return f_ab as f64;
+                }
+                let exp = if self.cfg.beg_strength > 0.0 {
+                    self.cfg.beg_strength * self.beg_gate(lb, rb)
+                } else if self.cfg.acsg_npmi_beta > 0.0 {
+                    self.cfg.acsg_npmi_beta
                 } else {
+                    return f_ab as f64;
+                };
+                if exp <= 0.0 {
                     f_ab as f64
+                } else {
+                    let npmi = self.npmi(f_ab, l, r).clamp(0.01, 1.0);
+                    f_ab as f64 * npmi.powf(exp)
                 }
             }
             Phase::Two => f_ab as f64 * (1.0 + self.npmi(f_ab, l, r)),

@@ -156,3 +156,29 @@ fn vocab_too_small_is_an_error() {
     let cfg = TrainPreset::AsymFull.config(128);
     assert!(train("hello", &cfg).is_err());
 }
+
+#[test]
+fn beg_gate_training_smoke() {
+    // Stem `食` is followed only by {べる,べた,べて}; noun `天気` by 8
+    // particles. With BEG on, `食` gets gate~0 (free merge) while `天気`
+    // gets gate~1 (full penalty).
+    let mut s = String::new();
+    for _ in 0..80u32 {
+        s.push_str("リンゴを食べる。ミカンも食べた。ブドウも食べて。\n");
+        s.push_str(
+            "天気の話、天気は晴れ、天気が悪い、天気を見る、天気に注意、\
+             天気で決まる、天気と予報、天気から分かる。\n",
+        );
+    }
+    let mut cfg = TrainPreset::AsymFull.config(600);
+    cfg.beg_strength = 3.0;
+    cfg.beg_stem_max = 1.2;
+    cfg.beg_noun_min = 2.0;
+    let model = train(&s, &cfg).unwrap();
+    let audit = model.audit_utf8_validity();
+    assert_eq!(audit.invalid_utf8_learned_tokens, 0);
+    let tok = Tokenizer::from_model(model).unwrap();
+    let text = "ミカンも食べる。天気が悪い。";
+    let ids = tok.encode(text).unwrap();
+    assert_eq!(tok.decode(&ids).unwrap(), text);
+}
