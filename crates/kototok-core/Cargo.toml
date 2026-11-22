@@ -1,8 +1,12 @@
 [package]
 name = "kototok-core"
+description = "AsymScript-BPE tokenizer core: Japanese-optimized DFA pre-tokenizer, UTF-8 atomicity, worst-case O(N) encoder"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
 rustc-hash.workspace = true

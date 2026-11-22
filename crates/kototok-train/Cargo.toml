@@ -1,11 +1,15 @@
 [package]
 name = "kototok-train"
+description = "Parallel trainer for the AsymScript-BPE (kototok) tokenizer: Phase-1 BPE + Phase-2 merges, ACSG, PickyBPE"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
 
 [dependencies]
-kototok-core = { path = "../kototok-core" }
+kototok-core = { path = "../kototok-core", version = "0.1.0" }
 rustc-hash.workspace = true
 rayon.workspace = true
 serde.workspace = true
