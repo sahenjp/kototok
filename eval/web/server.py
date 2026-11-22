@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Minimal tokenizer comparison server for kototok vs baselines.
+
+Stdlib only (http.server). Serves index.html and
+GET /api/tokenize?text=... -> JSON {models: [{name, count, cps, pieces}]}.
+
+Run:  ./.venv/bin/python web/server.py   (from eval/)
+Then open http://127.0.0.1:8777
+"""
+
+import json
+import sys
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+EVAL_DIR = Path(__file__).resolve().parent.parent
+MODELS_DIR = EVAL_DIR / "artifacts_real" / "models"
+WEB_DIR = Path(__file__).resolve().parent
+
+sys.path.insert(0, str(EVAL_DIR.parent / "pylib"))
+
+PORT = 8777
+
+loaders = []
+
+
+def load_models():
+    import kototok
+    from tokenizers import Tokenizer as HFTokenizer
+    import tiktoken
+
+    def ktok(name, fname):
+        tok = kototok.Tokenizer.load(str(MODELS_DIR / fname))
+        return (name, lambda text: tok.pieces(text))
+
+    def hf(name, fname):
+        tok = HFTokenizer.from_file(str(MODELS_DIR / fname))
+        return (name,
+                lambda text: [tok.decode([i]) for i in tok.encode(text).ids])
+
+    def tik(name):
+        enc = tiktoken.get_encoding("cl100k_base")
+
+        def run(text):
+            out = []
+            for tid in enc.encode(text):
+                b = enc.decode_single_token_bytes(tid)
+                try:
+                    out.append(b.decode("utf-8"))
+                except UnicodeDecodeError:
+                    out.append(" ".join(f"{x:02x}" for x in b))
+            return out
+
+        return (name, run)
+
+    loaders.append(ktok("kototok asym-full (BEG)", "kototok_asym-full_32768.ktok"))
+    loaders.append(ktok("kototok asym-no-acsg", "kototok_asym-no-acsg_32768.ktok"))
+    loaders.append(hf("hf-bpe", "hf_bpe_32768.json"))
+    loaders.append(hf("hf-unigram", "hf_unigram_32768.json"))
+    loaders.append(tik("tiktoken cl100k"))
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+    def _send(self, code, ctype, body):
+        data = body if isinstance(body, bytes) else body.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        url = urllib.parse.urlparse(self.path)
+        if url.path in ("/", "/index.html"):
+            self._send(200, "text/html; charset=utf-8",
+                       (WEB_DIR / "index.html").read_bytes())
+            return
+        if url.path == "/api/tokenize":
+            qs = urllib.parse.parse_qs(url.query)
+            text = qs.get("text", [""])[0]
+            models = []
+            for name, fn in loaders:
+                try:
+                    pieces = fn(text)
+                    n = max(len(pieces), 1)
+                    models.append({
+                        "name": name,
+                        "count": len(pieces),
+                        "cps": round(len(text) / n, 3),
+                        "pieces": pieces,
+                    })
+                except Exception as e:  # noqa: BLE001
+                    models.append({"name": name, "error": str(e)})
+            self._send(200, "application/json; charset=utf-8",
+                       json.dumps({"models": models}, ensure_ascii=False))
+            return
+        self._send(404, "text/plain", "not found")
+
+
+def main():
+    load_models()
+    print(f"serving on http://127.0.0.1:{PORT}  (Ctrl-C to stop)")
+    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+
+
+if __name__ == "__main__":
+    main()
