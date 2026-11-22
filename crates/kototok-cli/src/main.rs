@@ -10,7 +10,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
-use kototok_core::{KototokError, Model, Tokenizer};
+use kototok_core::{KototokError, Model, Tokenizer, VocabEvent};
 use kototok_train::{TrainPreset, train};
 
 #[derive(Parser)]
@@ -135,6 +135,22 @@ enum Command {
         model: PathBuf,
         #[arg(long)]
         text: String,
+    },
+    /// Boundary-aligned merge surgery: prune learned merges that cross gold
+    /// morphological boundaries (Aligned BPE-Knockout).
+    Refine {
+        /// Model path (`.ktok` or `.json`).
+        #[arg(long)]
+        model: PathBuf,
+        /// Gold boundary JSONL (`text`, `byte_spans`, `okurigana_words`).
+        #[arg(long)]
+        gold: PathBuf,
+        /// Output refined `.ktok` path.
+        #[arg(long)]
+        output: PathBuf,
+        /// Minimum boundary violations before pruning a merge.
+        #[arg(long, default_value_t = 1)]
+        min_violations: usize,
     },
     /// Time `encode` throughput on an input file.
     Bench {
@@ -350,6 +366,12 @@ fn run() -> Result<(), DynError> {
             );
             Ok(())
         }
+        Command::Refine {
+            model,
+            gold,
+            output,
+            min_violations,
+        } => refine_model(&model, &gold, &output, min_violations),
         Command::Bench {
             model,
             input,
@@ -429,6 +451,158 @@ fn read_text(input: Option<&Path>, text: Option<String>) -> io::Result<String> {
     let mut buf = String::new();
     io::stdin().read_to_string(&mut buf)?;
     Ok(buf)
+}
+
+/// Boundary-aligned merge surgery (Aligned BPE-Knockout).
+///
+/// Encodes the gold set, attributes every predicted piece that strictly
+/// contains a gold internal boundary (or cuts inside an okurigana word) to
+/// the merge event that produced it, and inserts a `Prune` event right
+/// after that merge. Post-hoc: no retraining needed.
+fn refine_model(
+    model_path: &Path,
+    gold_path: &Path,
+    out_path: &Path,
+    min_violations: usize,
+) -> Result<(), DynError> {
+    let mut model = Model::load_auto(model_path)?;
+    let tok = Tokenizer::from_model(model.clone())?;
+
+    let mut fid_to_internal = std::collections::HashMap::new();
+    for t in &model.internal_tokens {
+        if let Some(fid) = t.final_id {
+            fid_to_internal.insert(fid, t.internal_id);
+        }
+    }
+    let mut internal_to_merge: std::collections::HashMap<u32, (usize, u32, u32)> =
+        std::collections::HashMap::new();
+    for (i, ev) in model.events.iter().enumerate() {
+        if let VocabEvent::Merge {
+            left,
+            right,
+            result,
+        } = ev
+        {
+            internal_to_merge.insert(*result, (i, *left, *right));
+        }
+    }
+
+    // internal_id -> (occurrences, violations)
+    let mut stats: std::collections::HashMap<u32, (usize, usize)> =
+        std::collections::HashMap::new();
+    let mut n_lines = 0usize;
+    for line in fs::read_to_string(gold_path)?
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+    {
+        let v: serde_json::Value = serde_json::from_str(line)?;
+        let Some(text) = v["text"].as_str() else {
+            continue;
+        };
+        if text.is_empty() {
+            continue;
+        }
+        n_lines += 1;
+        let text_len = text.len();
+
+        let mut gbounds: Vec<usize> = v["byte_spans"]
+            .as_array()
+            .map(|spans| {
+                spans
+                    .iter()
+                    .flat_map(|s| {
+                        [s[0].as_u64().unwrap_or(0), s[1].as_u64().unwrap_or(0)]
+                    })
+                    .map(|b| b as usize)
+                    .filter(|&b| b > 0 && b < text_len)
+                    .collect()
+            })
+            .unwrap_or_default();
+        gbounds.sort_unstable();
+        gbounds.dedup();
+
+        // Boundaries inside okurigana words are protected: pruning those
+        // merges would split the words and break okurigana integrity.
+        let oku_spans: Vec<(usize, usize)> = v["okurigana_words"]
+            .as_array()
+            .map(|ws| {
+                ws.iter()
+                    .filter_map(|w| {
+                        let sp = w["byte_span"].as_array()?;
+                        Some((sp[0].as_u64()? as usize, sp[1].as_u64()? as usize))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        gbounds.retain(|b| {
+            !oku_spans
+                .iter()
+                .any(|&(ws, we)| ws < *b && *b < we)
+        });
+
+        let Ok(pieces) = tok.encode_with_offsets(text) else {
+            continue;
+        };
+        for (fid, s, e) in pieces {
+            let Some(&iid) = fid_to_internal.get(&fid) else {
+                continue;
+            };
+            let ent = stats.entry(iid).or_default();
+            ent.0 += 1;
+            // Over-merge: the piece strictly contains a gold boundary. Under-
+            // merging (splitting inside oku words) is NOT prunable — it needs
+            // more merges, not fewer.
+            let crosses = gbounds.iter().any(|&b| s < b && b < e);
+            if crosses {
+                ent.1 += 1;
+            }
+        }
+    }
+
+    let mut inserts: Vec<(usize, VocabEvent)> = Vec::new();
+    for (&iid, &(_occ, viol)) in &stats {
+        if viol < min_violations {
+            continue;
+        }
+        let Some(&(rank, left, right)) = internal_to_merge.get(&iid) else {
+            continue;
+        };
+        let child_alive = |id: u32| {
+            model
+                .internal_tokens
+                .iter()
+                .find(|t| t.internal_id == id)
+                .and_then(|t| t.final_id)
+                .is_some()
+        };
+        if !(child_alive(left) && child_alive(right)) {
+            continue;
+        }
+        inserts.push((
+            rank + 1,
+            VocabEvent::Prune {
+                target: iid,
+                split_into: vec![left, right],
+            },
+        ));
+    }
+    inserts.sort_by_key(|(idx, _)| std::cmp::Reverse(*idx));
+
+    let phase2 = model.metadata.phase2_start_rank as usize;
+    let before_phase2 = inserts.iter().filter(|(idx, _)| *idx <= phase2).count();
+    let n_pruned = inserts.len();
+    for (idx, ev) in inserts {
+        model.events.insert(idx, ev);
+    }
+    model.metadata.phase2_start_rank += before_phase2 as u32;
+    model.metadata.pruned_count += n_pruned;
+    model.metadata.name = format!("{}-refined", model.metadata.name);
+    model.metadata.train_notes = format!(
+        "aligned-BKO: {n_pruned} merges pruned via {n_lines} gold sentences"
+    );
+    model.save_binary(out_path)?;
+    println!("refined: pruned {n_pruned} merges ({n_lines} gold lines) -> {}", out_path.display());
+    Ok(())
 }
 
 /// Line-aligned, char-boundary-safe block splitter for parallel bench.
