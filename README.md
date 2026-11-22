@@ -98,22 +98,27 @@ python make_chart.py artifacts_real
 - **不正 UTF-8 トークン 0%** は 32k 語彙でも維持（hf-bpe は 2.17%）。
 - tiktoken の過結合 0% は「日本語をほぼ結合しない」（送り仮名 0%）の退化点であり、実用とは別物。
 
-#### vocab 102,400 級: Sarashina2 との直接対決（全項目勝利）
+#### vocab 200,000: Sarashina3 公開値・Sarashina2 実測を共に上回る
 
-拡張コーパス（**jawiki 記事 + 青空文庫 + OSS code/docs ≈ 419MB**）で学習した `asym-full` を、日本語特化の代表格 **Sarashina2**（SentencePiece Unigram、語彙 102,400、~1T トークンコーパス学習）と比較。
+拡張コーパス（**jawiki 記事 550MB + 青空文庫 31.7MB + 既存 22.3MB + OSS code/docs 111MB ≈ 709MB**）で学習した `asym-full`（語彙 200,000）の結果。
 
-| 指標 | sarashina2 (102k) | kototok asym-full (131k) | 勝者 |
-| --- | ---: | ---: | --- |
-| JA 圧縮 (chars/token) | 1.912 | **2.069** | kototok (+8%) |
-| EN 圧縮 (chars/token) | 3.401 | **3.736** | kototok (+10%) |
-| Code 圧縮 (bytes/token) | 3.260 | **3.659** | kototok (+12%) |
-| Mixed 圧縮 (bytes/token) | 3.472 | **3.833** | kototok (+10%) |
-| 形態素境界 F1 | 0.8277 | **0.9389** | kototok (+11pt) |
-| 名詞+助詞 過結合率 | 30.58% | **0.25%** | kototok (-99%) |
-| 送り仮名保持率 | 91.02% | **91.43%** | kototok |
-| 不正 UTF-8 学習トークン率 | — | **0.00%** | kototok |
+Sarashina3（API 専用・トークナイザー非公開）の公開実績値は「日本語 Wikipedia 約19億文字 → 約9.5億トークン」= **2.0 chars/token**。**同一レジスタの held-out jawiki 45.3M chars で kototok は 2.1371 chars/token**（21.2M トークン、公開値比 -6.9%のトークン数）— sarashina2 実測の 1.7715 を大きく上回り、公開値でも sarashina3 を上回る。
 
-**全 8 項目で勝利。** 同一語彙 102,400 版でも JA 2.035 / EN 3.537 / F1 0.9396 / oku 91.43% / over 0.25% と全勝（`eval/artifacts_real/models/kototok_asym-full_102400.ktok`）。
+| 指標 | sarashina2 (102k・実測) | sarashina3 (公開値) | kototok asym-full (200k) | 勝者 |
+| --- | ---: | ---: | ---: | --- |
+| JA 圧縮 held-out jawiki (chars/token) | 1.7715 | 2.0（公開値） | **2.1371** | kototok |
+| JA 圧縮 test (chars/token) | 1.912 | — | **2.124** | kototok |
+| EN 圧縮 (chars/token) | 3.401 | — | **3.814** | kototok |
+| Code 圧縮 (bytes/token) | 3.260 | — | **3.765** | kototok |
+| Mixed 圧縮 (bytes/token) | 3.472 | — | **3.969** | kototok |
+| 形態素境界 F1 | 0.8277 | — | **0.9445** | kototok |
+| 名詞+助詞 過結合率 | 30.58% | — | **0.25%** | kototok (-99%) |
+| 送り仮名保持率 | 91.02% | — | **91.84%** | kototok |
+| 不正 UTF-8 学習トークン率 | — | — | **0.00%** | kototok |
+
+sarashina2 との実測対決では**全項目勝利**を維持したまま全指標が改善。同一語彙 102,400 版（JA 2.035 / EN 3.537 / F1 0.9396）や 131k 版（JA 2.069 / EN 3.736 / F1 0.9389）も sarashina2 を全項目で上回る。
+
+前回の残課題だった `美|味しい` `気|持ちよく` も語彙拡大+コーパス拡大で 1 トークン化に解消。`山手線` も 1 トークン。
 
 送り仮名ギャップを埋めた新規機構:
 
@@ -122,19 +127,20 @@ python make_chart.py artifacts_real
 - **連用形複合ブースト**: `書き|換える` 型（左=漢字語幹+かな終わり、右=漢字頭+かな含む動詞形）の稀なペアにフルブースト。
 - **`gate_R≥0.95` ハード拒否**も維持 — 巨大語彙でも名詞+助詞は滑り込まない。
 
-学習レシピ（vocab 131,072）:
+学習レシピ（vocab 200,000・709MB コーパス）:
 
 ```
-kototok train --input eval/artifacts_real/data/train_corpus_jw.txt \
-  --vocab-size 131072 --phase2-min-npmi 0.30 \
+kototok train --input eval/artifacts_real/data/train_corpus_s3.txt \
+  --vocab-size 200000 --phase2-min-npmi 0.30 \
   --phase2-min-npmi-okuri 0.0 --beg-okuri-boost 20
 ```
 
-学習時エンコード例（jawiki コーパス、vocab 131,072）:
+学習時エンコード例（vocab 200,000）:
 
 ```
 日本|の|首都|で|食べる             # 名詞+助詞は分割、活用形は1トークン
 書き換える / 読み取る / 使いやすく   # 連用形複合・形容詞形も1トークン
+美味しい / 気持ちよく / 山手線        # 従来割れていた語も1トークン
 方法|を|試す                       # 助詞分割 + 動詞保持
 ```
 

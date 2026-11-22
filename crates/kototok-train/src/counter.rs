@@ -147,7 +147,9 @@ pub fn count_corpus(text: &str, cfg: &TrainConfig) -> CorpusCounts {
             .enumerate()
             .map(|(i, b)| (b.as_ref(), i as u32))
             .collect();
-        let max_seg = cfg.pretok.max_segment_chunks.max(1);
+        // Pair statistics only need short co-occurrence windows; capping the
+        // counted segment length keeps `segments` keys small on large corpora.
+        let max_seg = cfg.pretok.max_segment_chunks.clamp(1, 16);
 
         let segments = blocks
             .par_iter()

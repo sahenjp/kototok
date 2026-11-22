@@ -60,6 +60,7 @@ def load_models():
         return (name,
                 lambda text: [p.replace("▁", "␣") for p in sp_tok.encode(text, out_type=str)])
 
+    loaders.append(ktok("kototok 200k (s3)", "kototok_s3_200k.ktok"))
     loaders.append(ktok("kototok 131k (jawiki)", "kototok_asym-full_131072.ktok"))
     loaders.append(ktok("kototok 102k (jawiki)", "kototok_asym-full_102400.ktok"))
     loaders.append(ktok("kototok asym-full 32k", "kototok_asym-full_32768.ktok"))
