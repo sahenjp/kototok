@@ -3,7 +3,8 @@ Cargo.lock
 eval/.venv
 eval/__pycache__
 eval/**/__pycache__
-eval/artifacts
+eval/artifacts*
+/pylib
 *.ktok
 *.profraw
 .DS_Store
