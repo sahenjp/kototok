@@ -1,0 +1,18 @@
+[project]
+name = "kototok-eval"
+version = "0.1.0"
+description = "Reproducible corpus builder and benchmark suite for kototok (AsymScript-BPE)"
+requires-python = ">=3.11"
+dependencies = [
+    "tiktoken>=0.8.0",
+    "tokenizers>=0.20.0",
+    "sudachipy>=0.6.8",
+    "sudachidict-core>=20240409",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = false
