@@ -36,7 +36,8 @@ def load_models():
         return (name, lambda text: tok.pieces(text))
 
     def hf(name, fname):
-        tok = HFTokenizer.from_file(str(MODELS_DIR / fname))
+        p = fname if str(fname).startswith("/") else MODELS_DIR / fname
+        tok = HFTokenizer.from_file(str(p))
         return (name,
                 lambda text: [tok.decode([i]) for i in tok.encode(text).ids])
 
@@ -60,6 +61,7 @@ def load_models():
         return (name,
                 lambda text: [p.replace("▁", "␣") for p in sp_tok.encode(text, out_type=str)])
 
+    loaders.append(ktok("kototok 200k (s3g)", "kototok_s3g_200k.ktok"))
     loaders.append(ktok("kototok 200k (s3+en)", "kototok_s3e_200k.ktok"))
     loaders.append(ktok("kototok 200k (s3)", "kototok_s3_200k.ktok"))
     loaders.append(ktok("kototok 131k (jawiki)", "kototok_asym-full_131072.ktok"))
@@ -68,7 +70,15 @@ def load_models():
     loaders.append(ktok("kototok asym-no-acsg", "kototok_asym-no-acsg_32768.ktok"))
     loaders.append(hf("hf-bpe", "hf_bpe_32768.json"))
     loaders.append(hf("hf-unigram", "hf_unigram_32768.json"))
-    loaders.append(sp("sarashina2 (102k)", EVAL_DIR / "artifacts_real" / "external" / "sarashina2_tokenizer.model"))
+    EXT = EVAL_DIR / "artifacts_real" / "external"
+    loaders.append(sp("sarashina2 (102k)", EXT / "sarashina2_tokenizer.model"))
+    loaders.append(hf("llm-jp", EXT / "llmjp_tokenizer.json"))
+    loaders.append(sp("plamo (32k)", EXT / "plamo_tokenizer.model"))
+    loaders.append(hf("qwen2.5 (151k)", EXT / "qwen25_tokenizer.json"))
+    loaders.append(hf("llama3 (128k)", EXT / "llama3_tokenizer.json"))
+    loaders.append(hf("deepseek-v3", EXT / "deepseek_tokenizer.json"))
+    loaders.append(sp("gemma2 (256k)", EXT / "gemma2_tokenizer.model"))
+    loaders.append(sp("mistral (32k)", EXT / "mistral_tokenizer.model"))
     loaders.append(tik("tiktoken cl100k", "cl100k_base"))
     loaders.append(tik("tiktoken o200k", "o200k_base"))
 

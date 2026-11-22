@@ -169,10 +169,17 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                 } else {
                     i + 1
                 };
+                // `\n` followed by indentation or another newline may merge
+                // rightward so that code's frequent `newline+indent` and
+                // blank-line spans can form single tokens; any other
+                // following class keeps the seal.
+                let indent_next = bytes
+                    .get(end)
+                    .is_some_and(|&b| b == b' ' || b == b'\t' || b == b'\n');
                 out.push(PreToken {
                     start,
                     end,
-                    hard_break_after: true,
+                    hard_break_after: !indent_next,
                 });
                 i = end;
             }
@@ -208,7 +215,7 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                     i = j;
                 }
             }
-            ScriptClass::JaPunct | ScriptClass::AsciiPunctHard | ScriptClass::ProlongedMark => {
+            ScriptClass::JaPunct | ScriptClass::ProlongedMark => {
                 // A ー at run-start (or after a non-kana class) behaves like
                 // Japanese punctuation. Punctuation tokens are hard on both
                 // sides: the previous token is sealed too.
@@ -219,6 +226,23 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                     start,
                     end: i + len,
                     hard_break_after: true,
+                });
+                i += len;
+            }
+            ScriptClass::AsciiPunctHard => {
+                // ASCII punctuation seals a word-like predecessor
+                // (`word,` stays split) but merges rightward with punct,
+                // spaces, or words: `():`, `, the`, `(self`, `'t` can form.
+                if let Some(prev) = out.last_mut() {
+                    let pb = bytes[prev.end - 1];
+                    if pb.is_ascii_alphanumeric() || pb == b'_' || pb >= 0x80 {
+                        prev.hard_break_after = true;
+                    }
+                }
+                out.push(PreToken {
+                    start,
+                    end: i + len,
+                    hard_break_after: false,
                 });
                 i += len;
             }
@@ -366,18 +390,18 @@ mod tests {
             vec![
                 ("fn", false),
                 (" main", true), // sealed by (
-                ("(", true),
-                (")", true),
+                ("(", false),
+                (")", false),
                 (" ", true),
-                ("{", true),
+                ("{", false),
                 (" let", false),
                 (" x", false),
                 (" =", false),
                 (" 123", false),
                 ("45", true), // sealed by ;
-                (";", true),
+                (";", false),
                 (" ", true),
-                ("}", true),
+                ("}", false),
             ]
         );
         assert_coverage(s, &c);
@@ -430,12 +454,30 @@ mod tests {
                 ("b", false),
                 ("\r", true),
                 ("c", false),
-                ("\n", true),
+                ("\n", false),
                 ("  ", true),
                 ("x", false),
             ]
         );
         assert_coverage(s, &c);
+    }
+
+    #[test]
+    fn newline_blank_line_is_soft() {
+        let c = cfg(PreTokenizerMode::AsymScript);
+        let v = spans("a\n\n  b\nx", &c);
+        assert_eq!(
+            v,
+            vec![
+                ("a", false),
+                ("\n", false),
+                ("\n", false),
+                ("  ", true),
+                ("b", false),
+                ("\n", true),
+                ("x", false),
+            ]
+        );
     }
 
     #[test]

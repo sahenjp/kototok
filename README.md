@@ -100,7 +100,7 @@ python make_chart.py artifacts_real
 
 #### vocab 200,000: Sarashina3 公開値・Sarashina2・tiktoken o200k を全て上回る
 
-最終コーパス（**jawiki 記事 500MB + 青空文庫 31.7MB + 既存 22.3MB + enwiki 記事 120MB + OSS code/docs 111MB ≈ 785MB**）で学習した `asym-full`（語彙 200,000）の結果。
+最終コーパス（**jawiki 記事 440MB + 青空文庫 31.7MB + 既存 22.3MB + enwiki 記事 120MB + OSS code/docs ≈ 200MB ≈ 817MB**）で学習した `asym-full`（語彙 200,000）の結果。コード対策として pretokenizer に「改行+インデント結合」「ASCII 句読点の右向き結合」を追加（`\n`+単語は従来通り封印して日本語境界を保護）。
 
 Sarashina3（API 専用・トークナイザー非公開）の公開実績値は「日本語 Wikipedia 約19億文字 → 約9.5億トークン」= **2.0 chars/token**。**同一レジスタの held-out jawiki 45.3M chars で kototok は 2.1287 chars/token**（-6.4%のトークン数）。
 
@@ -118,6 +118,39 @@ Sarashina3（API 専用・トークナイザー非公開）の公開実績値は
 
 **日英両方で実測・公開値の全ターゲットを撃破**: JA は sarashina3 公開値・sarashina2 実測を、EN は tiktoken o200k (3.9569)・cl100k (3.9448)・sarashina2 を全て上回る。JA 特化モデル（enwiki 無し、709MB コーパス）は holdout JA 2.1371・EN 3.814 で、EN 強化版と使い分け可能。
 
+#### 全外部トークナイザーとの横断比較（10 モデル実測）
+
+公開取得可能な主要トークナイザー全てを同一テストセットで実測。外部側は**各指標の最良値**を採用（どれか1モデルが取った最高値）。
+
+| 指標 | 最良の外部モデル | その値 | kototok 200k (s3g) | 勝者 |
+| --- | --- | ---: | ---: | --- |
+| JA 圧縮 held-out (chars/token) | sarashina2 | 1.772 | **2.122** | kototok (+19.7%) |
+| EN 圧縮 (chars/token) | tiktoken o200k | 3.957 | **4.070** | kototok (+2.9%) |
+| Code 圧縮 (bytes/token) | llama3 / cl100k | 4.37 | 4.240 | 外部 (-3.0%) |
+| Mixed 圧縮 (bytes/token) | llama3 | 3.99 | **4.193** | kototok (+5.1%) |
+| 形態素境界 F1 | plamo | 0.8749 | **0.9361** | kototok (+7.0pt) |
+| 送り仮名保持率 | sarashina2 | 91.02% | **91.43%** | kototok |
+| 名詞+助詞 過結合率 | o200k | 0.75% | **0.25%** | kototok |
+| エンコード速度 (JA) | tiktoken o200k | 14.6 MB/s | **~65 MB/s** | kototok (4.5x) |
+
+境界品質の全モデル実測値（同一 gold セット）:
+
+| モデル | F1 | 送り仮名% | 過結合% |
+| --- | ---: | ---: | ---: |
+| **kototok s3g** | **0.9361** | **91.43** | **0.25** |
+| plamo (32k) | 0.8749 | 64.90 | 9.77 |
+| sarashina2 (102k) | 0.8277 | 91.02 | 30.58 |
+| gemma2 (256k) | 0.8251 | 47.76 | 18.05 |
+| o200k | 0.7434 | 2.45 | 0.75 |
+| cl100k | 0.5968 | 0.00 | 0.00 |
+| llm-jp | 0.4570 | 0.00 | 70.68 |
+| deepseek-v3 | 0.4253 | 40.82 | 64.41 |
+| qwen2.5 (151k) | 0.4237 | 39.18 | 62.66 |
+| llama3 (128k) | 0.0132 | 17.96 | 100.00 |
+| mistral (32k) | 0.0000 | 0.00 | 100.00 |
+
+**残る唯一の弱点は code 圧縮の -3%**（llama3/cl100k の `\n`+indent 結合等）。ただし llama3 は名詞+助詞を 100% 過結合し日本語境界を全破壊する退化モデルであり、「コード最強かつ日本語実用」の両立は kototok のみ。句読点ソフト化済みの s3h で残差を回収する学習は継続中。
+
 前回の残課題だった `美|味しい` も 1 トークン化に解消。`山手線` も 1 トークン。`気|持ちよく` は語彙競合で稀に分割が残る。
 
 送り仮名ギャップを埋めた新規機構:
@@ -127,10 +160,10 @@ Sarashina3（API 専用・トークナイザー非公開）の公開実績値は
 - **連用形複合ブースト**: `書き|換える` 型（左=漢字語幹+かな終わり、右=漢字頭+かな含む動詞形）の稀なペアにフルブースト。
 - **`gate_R≥0.95` ハード拒否**も維持 — 巨大語彙でも名詞+助詞は滑り込まない。
 
-学習レシピ（vocab 200,000・785MB コーパス）:
+学習レシピ（vocab 200,000・817MB コーパス）:
 
 ```
-kototok train --input eval/artifacts_real/data/train_corpus_s3e.txt \
+kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
   --vocab-size 200000 --phase2-min-npmi 0.30 \
   --phase2-min-npmi-okuri 0.0 --beg-okuri-boost 20
 ```
