@@ -39,8 +39,8 @@ def load_models():
         return (name,
                 lambda text: [tok.decode([i]) for i in tok.encode(text).ids])
 
-    def tik(name):
-        enc = tiktoken.get_encoding("cl100k_base")
+    def tik(name, enc_name):
+        enc = tiktoken.get_encoding(enc_name)
 
         def run(text):
             out = []
@@ -58,7 +58,8 @@ def load_models():
     loaders.append(ktok("kototok asym-no-acsg", "kototok_asym-no-acsg_32768.ktok"))
     loaders.append(hf("hf-bpe", "hf_bpe_32768.json"))
     loaders.append(hf("hf-unigram", "hf_unigram_32768.json"))
-    loaders.append(tik("tiktoken cl100k"))
+    loaders.append(tik("tiktoken cl100k", "cl100k_base"))
+    loaders.append(tik("tiktoken o200k", "o200k_base"))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -81,20 +82,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/tokenize":
             qs = urllib.parse.parse_qs(url.query)
-            text = qs.get("text", [""])[0]
+            texts = {"ja": qs.get("ja", [""])[0], "en": qs.get("en", [""])[0]}
             models = []
             for name, fn in loaders:
-                try:
-                    pieces = fn(text)
-                    n = max(len(pieces), 1)
-                    models.append({
-                        "name": name,
-                        "count": len(pieces),
-                        "cps": round(len(text) / n, 3),
-                        "pieces": pieces,
-                    })
-                except Exception as e:  # noqa: BLE001
-                    models.append({"name": name, "error": str(e)})
+                m = {"name": name}
+                for lang, text in texts.items():
+                    try:
+                        pieces = fn(text)
+                        n = max(len(pieces), 1)
+                        m[lang] = {
+                            "count": len(pieces),
+                            "cps": round(len(text) / n, 3),
+                            "pieces": pieces,
+                        }
+                    except Exception as e:  # noqa: BLE001
+                        m[lang] = {"error": str(e)}
+                models.append(m)
             self._send(200, "application/json; charset=utf-8",
                        json.dumps({"models": models}, ensure_ascii=False))
             return

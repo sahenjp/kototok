@@ -13,33 +13,35 @@
   }
   h1 { font-size: 18px; margin: 0 0 16px; font-weight: 600; }
   h1 small { color: #8b949e; font-weight: 400; }
-  #input {
-    width: 100%; min-height: 90px; resize: vertical;
+  .inputs { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .ibox { flex: 1 1 420px; min-width: 320px; }
+  .ibox .lbl { font-size: 12px; color: #8b949e; margin-bottom: 4px; }
+  .ibox textarea {
+    width: 100%; min-height: 76px; resize: vertical;
     background: #1c1f26; color: #e6e6e6;
     border: 1px solid #30363d; border-radius: 8px;
     padding: 10px 12px; font-size: 15px; line-height: 1.6;
   }
-  .samples { margin: 10px 0 18px; }
   .samples button {
     background: #21262d; color: #9ecbff; border: 1px solid #30363d;
-    border-radius: 6px; padding: 4px 10px; margin-right: 6px;
-    font-size: 12px; cursor: pointer;
+    border-radius: 6px; padding: 2px 9px; margin: 6px 6px 0 0;
+    font-size: 11px; cursor: pointer;
   }
   .samples button:hover { background: #2d333b; }
   .cols { display: flex; gap: 14px; flex-wrap: wrap; }
   .col {
-    flex: 1 1 200px; min-width: 200px;
+    flex: 1 1 240px; min-width: 230px;
     background: #1c1f26; border: 1px solid #30363d;
     border-radius: 10px; padding: 12px;
   }
-  .col h2 { font-size: 13px; margin: 0 0 2px; font-weight: 600; }
-  .col .stat { color: #8b949e; font-size: 11px; margin-bottom: 10px; }
-  .col .stat b { color: #d2a8ff; }
-  .pieces { line-height: 2.1; word-break: break-all; }
+  .col h2 { font-size: 13px; margin: 0 0 8px; font-weight: 600; }
+  .sec .lbl { font-size: 11px; color: #8b949e; }
+  .sec .stat { font-size: 11px; margin: 0 0 6px; }
+  .sec .stat b { color: #d2a8ff; }
+  .pieces { line-height: 2.1; word-break: break-all; margin-bottom: 12px; }
   .tok {
     display: inline-block; padding: 1px 6px; margin: 0 1px;
     border-radius: 4px; font-size: 14px;
-    border-bottom: 2px solid transparent;
   }
   .tok.ws { color: #6e7681; }
   .c0 { background: #1f3b57; } .c1 { background: #2d4a2b; }
@@ -50,37 +52,80 @@
 <body>
 <h1>kototok tokenizer compare <small>asym-full (BEG) vs baselines · vocab 32768</small></h1>
 
-<textarea id="input" spellcheck="false">私はリンゴを食べる。日本の首都は東京である。The quick brown fox jumps over 42 lazy dogs!</textarea>
-<div class="samples" id="samples"></div>
+<div class="inputs">
+  <div class="ibox">
+    <div class="lbl">日本語</div>
+    <textarea id="ja" spellcheck="false">私はリンゴを食べる。日本の首都は東京である。新しい方法を試す。</textarea>
+    <div class="samples" id="ja-samples"></div>
+  </div>
+  <div class="ibox">
+    <div class="lbl">English</div>
+    <textarea id="en" spellcheck="false">The quick brown fox jumps over 42 lazy dogs! Tokenization efficiency determines inference latency.</textarea>
+    <div class="samples" id="en-samples"></div>
+  </div>
+</div>
 <div class="cols" id="cols"></div>
 
 <script>
-const SAMPLES = {
+const JA_SAMPLES = {
   "日本語": "私はリンゴを食べる。日本の首都は東京である。新しい方法を試す。",
-  "English": "The quick brown fox jumps over 42 lazy dogs! Tokenization efficiency determines inference latency.",
-  "混合": "fn main() { let x = vec![1,2,3]; println!(\"こんにちは {x:?}\"); } // 高速トークナイザー実装",
   "送り仮名": "食べる、食べた、食べて、調べる、比べる、新しい、美しい、正しい",
   "助詞": "日本の気候は地域によって異なる。研究の成果が論文として発表された。",
 };
+const EN_SAMPLES = {
+  "English": "The quick brown fox jumps over 42 lazy dogs! Tokenization efficiency determines inference latency.",
+  "Code": "fn main() { let x = vec![1, 2, 3]; println!(\"{x:?}\"); }",
+  "Mixed": "混合入力: print(\"こんにちは\"); // 高速トークナイザー実装 12345",
+};
+const jaIn = document.getElementById("ja");
+const enIn = document.getElementById("en");
 const cols = document.getElementById("cols");
-const input = document.getElementById("input");
-const samples = document.getElementById("samples");
 
-for (const [label, text] of Object.entries(SAMPLES)) {
-  const b = document.createElement("button");
-  b.textContent = label;
-  b.onclick = () => { input.value = text; refresh(); };
-  samples.appendChild(b);
+function sampleButtons(samples, box, target) {
+  for (const [label, text] of Object.entries(samples)) {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.onclick = () => { box.value = text; refresh(); };
+    target.appendChild(b);
+  }
 }
+sampleButtons(JA_SAMPLES, jaIn, document.getElementById("ja-samples"));
+sampleButtons(EN_SAMPLES, enIn, document.getElementById("en-samples"));
 
 let timer = null;
-input.addEventListener("input", () => {
-  clearTimeout(timer);
-  timer = setTimeout(refresh, 250);
-});
+for (const el of [jaIn, enIn]) {
+  el.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(refresh, 250);
+  });
+}
+
+function section(label, m) {
+  const sec = document.createElement("div");
+  sec.className = "sec";
+  const head = document.createElement("div");
+  head.className = "stat";
+  head.innerHTML = `<span class="lbl">${label} · </span>` + (m.error
+    ? `<b>error:</b> ${m.error}`
+    : `<b>${m.count}</b> tokens · <b>${m.cps}</b> chars/tok`);
+  const pieces = document.createElement("div");
+  pieces.className = "pieces";
+  (m.pieces || []).forEach((p, i) => {
+    const s = document.createElement("span");
+    s.className = "tok c" + (i % 6);
+    if (/^\s+$/.test(p)) s.classList.add("ws");
+    s.textContent = p.replace(/ /g, "␣");
+    s.title = "#" + i;
+    pieces.appendChild(s);
+  });
+  sec.append(head, pieces);
+  return sec;
+}
 
 async function refresh() {
-  const res = await fetch("/api/tokenize?text=" + encodeURIComponent(input.value));
+  const q = "ja=" + encodeURIComponent(jaIn.value)
+          + "&en=" + encodeURIComponent(enIn.value);
+  const res = await fetch("/api/tokenize?" + q);
   const data = await res.json();
   cols.innerHTML = "";
   for (const m of data.models) {
@@ -88,22 +133,7 @@ async function refresh() {
     div.className = "col";
     const h = document.createElement("h2");
     h.textContent = m.name;
-    const stat = document.createElement("div");
-    stat.className = "stat";
-    stat.innerHTML = m.error
-      ? `<b>error:</b> ${m.error}`
-      : `<b>${m.count}</b> tokens · <b>${m.cps}</b> chars/tok`;
-    const pieces = document.createElement("div");
-    pieces.className = "pieces";
-    (m.pieces || []).forEach((p, i) => {
-      const s = document.createElement("span");
-      s.className = "tok c" + (i % 6);
-      if (/^\s+$/.test(p)) s.classList.add("ws");
-      s.textContent = p.replace(/ /g, "␣");
-      s.title = "#" + i;
-      pieces.appendChild(s);
-    });
-    div.append(h, stat, pieces);
+    div.append(h, section("日本語", m.ja || {}), section("English", m.en || {}));
     cols.appendChild(div);
   }
 }
