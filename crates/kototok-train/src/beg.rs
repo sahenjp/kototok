@@ -83,6 +83,46 @@ pub fn leading_hiragana_run(bytes: &[u8]) -> &[u8] {
     &bytes[..end]
 }
 
+/// Returns the UTF-8 suffix of `bytes` formed by the trailing run of
+/// `Hiragana` characters, or an empty slice if it does not end in `Hiragana`.
+pub fn trailing_hiragana_run(bytes: &[u8]) -> &[u8] {
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        return &[];
+    };
+    let mut start = s.len();
+    for (i, ch) in s.char_indices().rev() {
+        if classify_char(ch) == ScriptClass::Hiragana {
+            start = i;
+        } else {
+            break;
+        }
+    }
+    &bytes[start..]
+}
+
+/// True when `bytes` is a non-empty all-Hiragana string.
+pub fn all_hiragana(bytes: &[u8]) -> bool {
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    !s.is_empty() && s.chars().all(|c| classify_char(c) == ScriptClass::Hiragana)
+}
+
+/// True when `bytes` is made only of `Kanji` and `Hiragana` and contains at
+/// least one `Kanji` — the shape of a stem-plus-okurigana word or prefix.
+pub fn is_kanji_hiragana_word(bytes: &[u8]) -> bool {
+    let Ok(s) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let mut has_kanji = false;
+    let ok = s.chars().all(|c| {
+        let cl = classify_char(c);
+        has_kanji |= cl == ScriptClass::Kanji;
+        cl == ScriptClass::Kanji || cl == ScriptClass::Hiragana
+    });
+    ok && has_kanji
+}
+
 pub fn build_beg_scores(
     counts: &CorpusCounts,
     stem_max: f64,

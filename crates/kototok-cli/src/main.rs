@@ -55,6 +55,10 @@ enum Command {
         /// Override Phase-2 minimum NPMI for pure-ASCII pairs.
         #[arg(long)]
         phase2_min_npmi_ascii: Option<f64>,
+        /// Override Phase-2 minimum NPMI for low-gate Kanji->Hiragana
+        /// (inflection/okurigana-shaped) pairs.
+        #[arg(long)]
+        phase2_min_npmi_okuri: Option<f64>,
         /// Override the pure-ASCII share of the Phase-2 vocab budget.
         #[arg(long)]
         phase2_ascii_quota: Option<f64>,
@@ -82,6 +86,9 @@ enum Command {
         /// Apply the BEG gate to Phase-2 merges too (default on, `0` disables).
         #[arg(long)]
         beg_phase2: Option<u8>,
+        /// Okurigana boost multiplier for low-gate Kanji->Hiragana pairs.
+        #[arg(long)]
+        beg_okuri_boost: Option<f64>,
         /// Rayon worker threads (0 = default pool size).
         #[arg(long)]
         threads: Option<usize>,
@@ -176,6 +183,7 @@ fn run() -> Result<(), DynError> {
             phase1_ratio,
             phase2_min_npmi,
             phase2_min_npmi_ascii,
+            phase2_min_npmi_okuri,
             phase2_ascii_quota,
             min_char_freq,
             min_pair_freq,
@@ -185,6 +193,7 @@ fn run() -> Result<(), DynError> {
             beg_particle_lo,
             beg_particle_hi,
             beg_phase2,
+            beg_okuri_boost,
             threads,
         } => {
             if let Some(t) = threads
@@ -213,6 +222,9 @@ fn run() -> Result<(), DynError> {
             if let Some(v) = phase2_min_npmi_ascii {
                 cfg.phase2_min_npmi_ascii = v;
             }
+            if let Some(v) = phase2_min_npmi_okuri {
+                cfg.phase2_min_npmi_okuri = v;
+            }
             if let Some(v) = phase2_ascii_quota {
                 cfg.phase2_ascii_quota = v;
             }
@@ -239,6 +251,9 @@ fn run() -> Result<(), DynError> {
             }
             if let Some(v) = beg_phase2 {
                 cfg.beg_phase2 = v != 0;
+            }
+            if let Some(v) = beg_okuri_boost {
+                cfg.beg_okuri_boost = v;
             }
             let model = train(&corpus, &cfg)?;
             model.save_binary(&output)?;

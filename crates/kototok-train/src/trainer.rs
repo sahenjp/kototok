@@ -14,8 +14,8 @@ use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use kototok_core::{
-    ByteMode, InternalToken, KTOK_FORMAT_VERSION, KototokError, Model, ModelMetadata, TokenKind,
-    Tokenizer, VocabEvent, is_kanji_to_hiragana_cross,
+    ByteMode, InternalToken, KTOK_FORMAT_VERSION, KototokError, Model, ModelMetadata, ScriptClass,
+    TokenKind, Tokenizer, VocabEvent, classify_char, is_kanji_to_hiragana_cross,
 };
 
 use crate::config::TrainConfig;
@@ -458,13 +458,73 @@ impl Trainer {
     /// (pure-Latin superwords) may merge at `phase2_min_npmi_ascii`, buying
     /// English compression without touching any JA-script boundary. UTF-8
     /// guarantees JA-script bytes are all >= 0x80, so an ASCII byte scan
-    /// decides the class.
+    /// decides the class. `Kanji -> Hiragana` pairs whose right side reads as
+    /// an inflectional run (gate_R < 0.9) get their own low floor — whole-word
+    /// conjugated forms — while particle-like runs are already vetoed and the
+    /// mid band keeps the strict floor.
     fn phase2_npmi_floor(&self, l: u32, r: u32) -> f64 {
         if self.is_ascii_pair(l, r) {
-            self.cfg.phase2_min_npmi_ascii
-        } else {
-            self.cfg.phase2_min_npmi
+            return self.cfg.phase2_min_npmi_ascii;
         }
+        let lb = &self.tokens[l as usize].bytes;
+        let rb = &self.tokens[r as usize].bytes;
+        if is_kanji_to_hiragana_cross(lb, rb) {
+            let hira = crate::beg::leading_hiragana_run(rb);
+            let gate_r = self.beg.hira.get(hira).copied().unwrap_or(0.0);
+            if gate_r < 0.9 {
+                return self.cfg.phase2_min_npmi_okuri;
+            }
+            return self.cfg.phase2_min_npmi;
+        }
+        // Okurigana-shaped pair with a partly-merged stem (`確か|める`):
+        // right is all-Hiragana, left is a Kanji+Hiragana word. Gate on the
+        // COMBINED hiragana tail — the run the corpus actually shows after
+        // the kanji stem — so `名詞|の` stays on the strict floor.
+        if let Some(gate) = self.okurigana_tail_gate(lb, rb)
+            && gate < 0.9
+        {
+            return self.cfg.phase2_min_npmi_okuri;
+        }
+        // Ren'yo compound (`書き|換える`): left ends in Hiragana and holds a
+        // Kanji stem; right is Kanji-led with a Hiragana tail (verb-shaped).
+        if Self::is_renyo_pair(lb, rb) {
+            return self.cfg.phase2_min_npmi_okuri;
+        }
+        self.cfg.phase2_min_npmi
+    }
+
+    /// Gate for pairs whose merge extends a stem+okurigana word (`確か|める`):
+    /// `rb` all-Hiragana, `lb` a Kanji/Hiragana word; the looked-up tail is
+    /// the combined Hiragana run. Returns `None` unless the run is attested.
+    fn okurigana_tail_gate(&self, lb: &[u8], rb: &[u8]) -> Option<f64> {
+        if !crate::beg::all_hiragana(rb) || !crate::beg::is_kanji_hiragana_word(lb) {
+            return None;
+        }
+        let mut tail = crate::beg::trailing_hiragana_run(lb).to_vec();
+        tail.extend_from_slice(rb);
+        self.beg.hira.get(tail.as_slice()).copied()
+    }
+
+    /// `lb` ends in Hiragana and contains a Kanji; `rb` starts with Kanji and
+    /// contains Hiragana — the shape of a ren'yo (verb-stem) compound.
+    fn is_renyo_pair(lb: &[u8], rb: &[u8]) -> bool {
+        let (Ok(ls), Ok(rs)) = (std::str::from_utf8(lb), std::str::from_utf8(rb)) else {
+            return false;
+        };
+        let mut lb_kanji = false;
+        let mut lb_ends_hira = false;
+        for ch in ls.chars() {
+            let cl = classify_char(ch);
+            lb_kanji |= cl == ScriptClass::Kanji;
+            lb_ends_hira = cl == ScriptClass::Hiragana;
+        }
+        let mut it = rs.chars();
+        let Some(first) = it.next() else {
+            return false;
+        };
+        let rb_verb_shaped = classify_char(first) == ScriptClass::Kanji
+            && it.any(|c| classify_char(c) == ScriptClass::Hiragana);
+        lb_kanji && lb_ends_hira && rb_verb_shaped
     }
 
     fn is_ascii_pair(&self, l: u32, r: u32) -> bool {
@@ -515,38 +575,61 @@ impl Trainer {
         pmi / -(f_ab as f64 / t as f64).ln()
     }
 
-    /// BEG gate = `max(left-noun-gate, right-particle-gate)`: `0.0` lets the
-    /// pair merge freely (stem + okurigana), `1.0` applies the full penalty
-    /// (noun + particle). Unknown kanji suffixes default to noun.
-    fn beg_gate(&self, l_bytes: &[u8], r_bytes: &[u8]) -> f64 {
-        let suffix = crate::beg::trailing_kanji_run(l_bytes);
-        let g_l = self.beg.suffix.get(suffix).copied().unwrap_or(1.0);
-        let hira = crate::beg::leading_hiragana_run(r_bytes);
-        let g_r = self.beg.hira.get(hira).copied().unwrap_or(0.0);
-        g_l.max(g_r)
-    }
-
+    /// BEG gate = `max(left-noun-gate, right-particle-gate)` unless the
+    /// right side is clearly inflectional (`g_r <= 0.5`), in which case the
+    /// right gate alone decides: a productive stem like `染` keeps ~10
+    /// distinct inflectional followers and would otherwise read as
+    /// noun-like. Unknown kanji suffixes default to noun.
     fn score(&self, l: u32, r: u32, f_ab: u64, phase: Phase) -> f64 {
         match phase {
             Phase::One => {
                 let lb = &self.tokens[l as usize].bytes;
                 let rb = &self.tokens[r as usize].bytes;
                 if !is_kanji_to_hiragana_cross(lb, rb) {
+                    // Partly-merged stems (`確か|める`) are okurigana-shaped
+                    // but never cross K->H at the boundary, so the boost must
+                    // fire here too for stem+inflection forms to win slots.
+                    if self.cfg.beg_okuri_boost > 0.0
+                        && let Some(gate) = self.okurigana_tail_gate(lb, rb)
+                        && gate < 0.9
+                    {
+                        return f_ab as f64 * (1.0 + self.cfg.beg_okuri_boost * (1.0 - gate));
+                    }
                     return f_ab as f64;
                 }
+                // Right side is the reliable signal (same lesson as Phase
+                // 2): a low-gate Hiragana run is inflectional, so the pair is
+                // stem+okurigana no matter how diverse the stem's follower
+                // set is. `max(g_l, g_r)` punishes productive stems like `染`
+                // because verbs take ~10+ inflection shapes -> high entropy.
+                // Only when the right side is NOT clearly inflectional does
+                // the left-side noun gate matter.
+                let suffix = crate::beg::trailing_kanji_run(lb);
+                let g_l = self.beg.suffix.get(suffix).copied().unwrap_or(1.0);
+                let hira = crate::beg::leading_hiragana_run(rb);
+                let g_r = self.beg.hira.get(hira).copied().unwrap_or(0.0);
+                let gate = if self.cfg.beg_strength > 0.0 && g_r <= 0.5 {
+                    g_r
+                } else {
+                    g_l.max(g_r)
+                };
                 let exp = if self.cfg.beg_strength > 0.0 {
-                    self.cfg.beg_strength * self.beg_gate(lb, rb)
+                    self.cfg.beg_strength * gate
                 } else if self.cfg.acsg_npmi_beta > 0.0 {
                     self.cfg.acsg_npmi_beta
                 } else {
                     return f_ab as f64;
                 };
-                if exp <= 0.0 {
+                let base = if exp <= 0.0 {
                     f_ab as f64
                 } else {
                     let npmi = self.npmi(f_ab, l, r).clamp(0.01, 1.0);
                     f_ab as f64 * npmi.powf(exp)
-                }
+                };
+                // Boost is keyed on the right run only: an inflectional
+                // right side promotes the merge even when the left stem has
+                // a high-entropy follower distribution.
+                base * (1.0 + self.cfg.beg_okuri_boost * (1.0 - g_r))
             }
             Phase::Two => {
                 let npmi = self.npmi(f_ab, l, r);
@@ -571,6 +654,27 @@ impl Trainer {
                     if exp > 0.0 {
                         score *= npmi.clamp(0.01, 1.0).powf(exp);
                     }
+                    // Same-side boost: inflectional right runs (低 gate_R)
+                    // get promoted so stem+inflection superwords re-form.
+                    score *= 1.0 + self.cfg.beg_okuri_boost * (1.0 - g_r);
+                } else if self.cfg.beg_okuri_boost > 0.0
+                    && let Some(gate) = self.okurigana_tail_gate(
+                        &self.tokens[l as usize].bytes,
+                        &self.tokens[r as usize].bytes,
+                    )
+                    && gate < 0.9
+                {
+                    score *= 1.0 + self.cfg.beg_okuri_boost * (1.0 - gate);
+                } else if Self::is_renyo_pair(
+                    &self.tokens[l as usize].bytes,
+                    &self.tokens[r as usize].bytes,
+                ) {
+                    // Ren'yo compounds (`書き|換える`) get the full boost:
+                    // no inflectional run exists to gate on, and these pairs
+                    // are rare enough that a half-strength bonus never wins
+                    // the heap ordering against frequent superwords. The
+                    // verb-shaped right side is itself the license.
+                    score *= 1.0 + self.cfg.beg_okuri_boost;
                 }
                 score
             }

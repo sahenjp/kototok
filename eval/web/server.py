@@ -60,8 +60,9 @@ def load_models():
         return (name,
                 lambda text: [p.replace("▁", "␣") for p in sp_tok.encode(text, out_type=str)])
 
-    loaders.append(ktok("kototok asym-full 102k", "kototok_asym-full_102400.ktok"))
-    loaders.append(ktok("kototok asym-full (BEG)", "kototok_asym-full_32768.ktok"))
+    loaders.append(ktok("kototok 131k (jawiki)", "kototok_asym-full_131072.ktok"))
+    loaders.append(ktok("kototok 102k (jawiki)", "kototok_asym-full_102400.ktok"))
+    loaders.append(ktok("kototok asym-full 32k", "kototok_asym-full_32768.ktok"))
     loaders.append(ktok("kototok asym-no-acsg", "kototok_asym-no-acsg_32768.ktok"))
     loaders.append(hf("hf-bpe", "hf_bpe_32768.json"))
     loaders.append(hf("hf-unigram", "hf_unigram_32768.json"))

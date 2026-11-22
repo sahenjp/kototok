@@ -35,6 +35,12 @@ pub struct TrainConfig {
     /// merge at a much lower NPMI than JA-script pairs. Set equal to
     /// `phase2_min_npmi` to disable the split floor.
     pub phase2_min_npmi_ascii: f64,
+    /// Looser Phase-2 NPMI floor for `Kanji -> Hiragana` pairs whose right
+    /// side is an inflectional run (BEG gate_R < 0.9): stem + okurigana
+    /// shapes merge almost as freely as ASCII, while particle-like runs
+    /// (gate_R >= 0.95) stay hard-vetoed and the mid band keeps the normal
+    /// floor. Set equal to `phase2_min_npmi` to disable.
+    pub phase2_min_npmi_okuri: f64,
     /// Maximum fraction of the Phase-2 vocabulary budget that pure-ASCII
     /// merges may occupy. `1.0` disables the quota.
     pub phase2_ascii_quota: f64,
@@ -56,6 +62,10 @@ pub struct TrainConfig {
     pub beg_particle_hi: f64,
     /// Also apply the BEG gate to Phase-2 (soft-boundary superword) merges.
     pub beg_phase2: bool,
+    /// Okurigana boost: `Kanji -> Hiragana` pairs with low combined gate
+    /// (stem + inflection shape) get score `x(1 + boost*(1-gate))`.
+    /// `0.0` disables the bonus.
+    pub beg_okuri_boost: f64,
     /// Extra never-mergeable special tokens appended after the byte entries.
     pub special_tokens: Vec<String>,
 }
@@ -133,6 +143,7 @@ impl TrainPreset {
             phase1_vocab_ratio: if self == Self::AsymFull { 0.75 } else { 0.85 },
             phase2_min_npmi: if self == Self::AsymFull { 0.45 } else { 0.25 },
             phase2_min_npmi_ascii: if self == Self::AsymFull { 0.10 } else { 0.25 },
+            phase2_min_npmi_okuri: if self == Self::AsymFull { 0.45 } else { 0.25 },
             phase2_ascii_quota: if self == Self::AsymFull { 0.30 } else { 1.0 },
             beg_strength: if self == Self::AsymFull { 3.0 } else { 0.0 },
             beg_stem_max: 0.7,
@@ -140,6 +151,7 @@ impl TrainPreset {
             beg_particle_lo: 6.0,
             beg_particle_hi: 9.0,
             beg_phase2: true,
+            beg_okuri_boost: 0.0,
             special_tokens: Vec::new(),
         }
     }
