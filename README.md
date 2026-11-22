@@ -80,3 +80,7 @@ python make_chart.py artifacts32k
 
 \* tiktoken は 100k 語彙の外部参照。同サイズ同士の直接比較は `hf-*` 行を参照。
 全結果: [eval/artifacts/report.md](eval/artifacts/report.md)・[eval/artifacts32k/report.md](eval/artifacts32k/report.md) / 可視化: [chart.html](eval/artifacts/chart.html)・[chart32k](eval/artifacts32k/chart.html)
+
+## ライセンス
+
+[MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE) のデュアルライセンス。
