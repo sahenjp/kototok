@@ -29,6 +29,7 @@ def load_models():
     import kototok
     from tokenizers import Tokenizer as HFTokenizer
     import tiktoken
+    import sentencepiece as spm
 
     def ktok(name, fname):
         tok = kototok.Tokenizer.load(str(MODELS_DIR / fname))
@@ -54,10 +55,17 @@ def load_models():
 
         return (name, run)
 
+    def sp(name, fname):
+        sp_tok = spm.SentencePieceProcessor(model_file=str(fname))
+        return (name,
+                lambda text: [p.replace("▁", "␣") for p in sp_tok.encode(text, out_type=str)])
+
+    loaders.append(ktok("kototok asym-full 102k", "kototok_asym-full_102400.ktok"))
     loaders.append(ktok("kototok asym-full (BEG)", "kototok_asym-full_32768.ktok"))
     loaders.append(ktok("kototok asym-no-acsg", "kototok_asym-no-acsg_32768.ktok"))
     loaders.append(hf("hf-bpe", "hf_bpe_32768.json"))
     loaders.append(hf("hf-unigram", "hf_unigram_32768.json"))
+    loaders.append(sp("sarashina2 (102k)", EVAL_DIR / "artifacts_real" / "external" / "sarashina2_tokenizer.model"))
     loaders.append(tik("tiktoken cl100k", "cl100k_base"))
     loaders.append(tik("tiktoken o200k", "o200k_base"))
 

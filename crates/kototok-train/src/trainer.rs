@@ -439,6 +439,9 @@ impl Trainer {
         if f < self.cfg.min_pair_freq {
             return;
         }
+        if self.beg_hard_veto(l, r) {
+            return;
+        }
         if phase == Phase::Two {
             if self.npmi(f, l, r) < self.phase2_npmi_floor(l, r) {
                 return;
@@ -467,6 +470,24 @@ impl Trainer {
     fn is_ascii_pair(&self, l: u32, r: u32) -> bool {
         self.tokens[l as usize].bytes.iter().all(|b| b.is_ascii())
             && self.tokens[r as usize].bytes.iter().all(|b| b.is_ascii())
+    }
+
+    /// Hard veto: a `Kanji -> Hiragana` pair whose right side is a definite
+    /// particle-like run (gate_R ~= 1) may never merge. The multiplicative
+    /// NPMI gate alone is too weak for very high-NPMI pairs — `npmi^3` still
+    /// leaves ~73% of the score, so a large vocab budget lets 日本|の slip
+    /// through. Inflectional runs (べる, しい) sit below 0.9 and stay legal.
+    fn beg_hard_veto(&self, l: u32, r: u32) -> bool {
+        if self.cfg.beg_strength <= 0.0
+            || !is_kanji_to_hiragana_cross(
+                &self.tokens[l as usize].bytes,
+                &self.tokens[r as usize].bytes,
+            )
+        {
+            return false;
+        }
+        let hira = crate::beg::leading_hiragana_run(&self.tokens[r as usize].bytes);
+        self.beg.hira.get(hira).copied().unwrap_or(0.0) >= 0.95
     }
 
     /// Whether the ASCII share of the Phase-2 budget is exhausted. A quota
