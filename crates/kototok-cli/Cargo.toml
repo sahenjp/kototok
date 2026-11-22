@@ -1,0 +1,17 @@
+[package]
+name = "kototok-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "kototok"
+path = "src/main.rs"
+
+[dependencies]
+kototok-core = { path = "../kototok-core" }
+kototok-train = { path = "../kototok-train" }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true

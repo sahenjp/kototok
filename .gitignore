@@ -1,0 +1,9 @@
+/target
+Cargo.lock
+eval/.venv
+eval/__pycache__
+eval/**/__pycache__
+eval/artifacts
+*.ktok
+*.profraw
+.DS_Store

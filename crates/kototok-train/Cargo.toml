@@ -1,0 +1,12 @@
+[package]
+name = "kototok-train"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kototok-core = { path = "../kototok-core" }
+rustc-hash.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
