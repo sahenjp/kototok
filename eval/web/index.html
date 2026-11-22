@@ -50,7 +50,7 @@
 </style>
 </head>
 <body>
-<h1>kototok tokenizer compare <small>asym-full (BEG) vs baselines · vocab 32768</small></h1>
+<h1>kototok tokenizer compare <small>s3h AsymScript-BPE · vocab 200k vs 10 external tokenizers</small></h1>
 
 <div class="inputs">
   <div class="ibox">
@@ -62,6 +62,11 @@
     <div class="lbl">English</div>
     <textarea id="en" spellcheck="false">The quick brown fox jumps over 42 lazy dogs! Tokenization efficiency determines inference latency.</textarea>
     <div class="samples" id="en-samples"></div>
+  </div>
+  <div class="ibox">
+    <div class="lbl">日英混合・コード</div>
+    <textarea id="mix" spellcheck="false">関数 tokenize(text) は日本語を subword に分割する。圧縮率は 4.9 bytes/token を記録した。</textarea>
+    <div class="samples" id="mix-samples"></div>
   </div>
 </div>
 <div class="cols" id="cols"></div>
@@ -75,10 +80,17 @@ const JA_SAMPLES = {
 const EN_SAMPLES = {
   "English": "The quick brown fox jumps over 42 lazy dogs! Tokenization efficiency determines inference latency.",
   "Code": "fn main() { let x = vec![1, 2, 3]; println!(\"{x:?}\"); }",
-  "Mixed": "混合入力: print(\"こんにちは\"); // 高速トークナイザー実装 12345",
+  "Prose": "Tokenization is the first bottleneck in any language model pipeline.",
+};
+const MIX_SAMPLES = {
+  "日英混在": "関数 tokenize(text) は日本語を subword に分割する。圧縮率は 4.9 bytes/token を記録した。",
+  "仕様書風": "この API は UTF-8 の境界を保ちつつ、英語の superword merge も適用します。latency は 65MB/s です。",
+  "コード+日本語": "混合入力: print(\"こんにちは\"); // 高速トークナイザー実装 12345\nif (score > 0.9) { ok(); } // 閾値チェック",
+  "チャット風": "AI に「日本の首都は？」と聞いたら \"Tokyo\" と答えた。Next, I asked about 送り仮名 rules.",
 };
 const jaIn = document.getElementById("ja");
 const enIn = document.getElementById("en");
+const mixIn = document.getElementById("mix");
 const cols = document.getElementById("cols");
 
 function sampleButtons(samples, box, target) {
@@ -91,9 +103,10 @@ function sampleButtons(samples, box, target) {
 }
 sampleButtons(JA_SAMPLES, jaIn, document.getElementById("ja-samples"));
 sampleButtons(EN_SAMPLES, enIn, document.getElementById("en-samples"));
+sampleButtons(MIX_SAMPLES, mixIn, document.getElementById("mix-samples"));
 
 let timer = null;
-for (const el of [jaIn, enIn]) {
+for (const el of [jaIn, enIn, mixIn]) {
   el.addEventListener("input", () => {
     clearTimeout(timer);
     timer = setTimeout(refresh, 250);
@@ -124,7 +137,8 @@ function section(label, m) {
 
 async function refresh() {
   const q = "ja=" + encodeURIComponent(jaIn.value)
-          + "&en=" + encodeURIComponent(enIn.value);
+          + "&en=" + encodeURIComponent(enIn.value)
+          + "&mix=" + encodeURIComponent(mixIn.value);
   const res = await fetch("/api/tokenize?" + q);
   const data = await res.json();
   cols.innerHTML = "";
@@ -133,7 +147,7 @@ async function refresh() {
     div.className = "col";
     const h = document.createElement("h2");
     h.textContent = m.name;
-    div.append(h, section("日本語", m.ja || {}), section("English", m.en || {}));
+    div.append(h, section("日本語", m.ja || {}), section("English", m.en || {}), section("混合", m.mix || {}));
     cols.appendChild(div);
   }
 }

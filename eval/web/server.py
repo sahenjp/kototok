@@ -62,15 +62,6 @@ def load_models():
                 lambda text: [p.replace("▁", "␣") for p in sp_tok.encode(text, out_type=str)])
 
     loaders.append(ktok("kototok 200k (s3h)", "kototok_s3h_200k.ktok"))
-    loaders.append(ktok("kototok 200k (s3g)", "kototok_s3g_200k.ktok"))
-    loaders.append(ktok("kototok 200k (s3+en)", "kototok_s3e_200k.ktok"))
-    loaders.append(ktok("kototok 200k (s3)", "kototok_s3_200k.ktok"))
-    loaders.append(ktok("kototok 131k (jawiki)", "kototok_asym-full_131072.ktok"))
-    loaders.append(ktok("kototok 102k (jawiki)", "kototok_asym-full_102400.ktok"))
-    loaders.append(ktok("kototok asym-full 32k", "kototok_asym-full_32768.ktok"))
-    loaders.append(ktok("kototok asym-no-acsg", "kototok_asym-no-acsg_32768.ktok"))
-    loaders.append(hf("hf-bpe", "hf_bpe_32768.json"))
-    loaders.append(hf("hf-unigram", "hf_unigram_32768.json"))
     EXT = EVAL_DIR / "artifacts_real" / "external"
     loaders.append(sp("sarashina2 (102k)", EXT / "sarashina2_tokenizer.model"))
     loaders.append(hf("llm-jp", EXT / "llmjp_tokenizer.json"))
@@ -104,7 +95,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if url.path == "/api/tokenize":
             qs = urllib.parse.parse_qs(url.query)
-            texts = {"ja": qs.get("ja", [""])[0], "en": qs.get("en", [""])[0]}
+            texts = {
+                "ja": qs.get("ja", [""])[0],
+                "en": qs.get("en", [""])[0],
+                "mix": qs.get("mix", [""])[0],
+            }
             models = []
             for name, fn in loaders:
                 m = {"name": name}
