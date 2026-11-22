@@ -5,7 +5,7 @@
 //! byte-for-byte (contiguous `0..text.len()`, char boundaries only).
 
 use crate::model::{PreTokenizerConfig, PreTokenizerMode};
-use crate::script::{classify_ascii_byte, classify_char, ScriptClass};
+use crate::script::{ScriptClass, classify_ascii_byte, classify_char};
 
 /// A pre-tokenizer span over the input text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,9 +81,7 @@ fn run_step(state: RunState, cls: ScriptClass, mode: PreTokenizerMode) -> (bool,
     match (state, cls) {
         (Kanji, ScriptClass::Kanji) => (true, Kanji),
         // Okurigana: Kanji -> Hiragana stays inside the chunk (AsymScript only).
-        (Kanji, ScriptClass::Hiragana) if mode == PreTokenizerMode::AsymScript => {
-            (true, KanjiHira)
-        }
+        (Kanji, ScriptClass::Hiragana) if mode == PreTokenizerMode::AsymScript => (true, KanjiHira),
         // Hiragana -> Hiragana stays together both inside and outside a
         // Kanji-prefixed tail; ー attaches to a Hiragana/Katakana tail.
         (KanjiHira, ScriptClass::Hiragana) => (true, KanjiHira),
@@ -189,7 +187,9 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                     && j < n
                     && matches!(
                         class_at(text, j).0,
-                        ScriptClass::AsciiIdent | ScriptClass::AsciiDigit | ScriptClass::AsciiOperator
+                        ScriptClass::AsciiIdent
+                            | ScriptClass::AsciiDigit
+                            | ScriptClass::AsciiOperator
                     );
                 if attaches {
                     attach_from = Some(i);
@@ -208,9 +208,7 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                     i = j;
                 }
             }
-            ScriptClass::JaPunct
-            | ScriptClass::AsciiPunctHard
-            | ScriptClass::ProlongedMark => {
+            ScriptClass::JaPunct | ScriptClass::AsciiPunctHard | ScriptClass::ProlongedMark => {
                 // A ー at run-start (or after a non-kana class) behaves like
                 // Japanese punctuation. Punctuation tokens are hard on both
                 // sides: the previous token is sealed too.
@@ -392,7 +390,17 @@ mod tests {
         let v = spans(s, &c);
         assert_eq!(
             v.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
-            vec!["新", "しい", "Rust", "の", "トークナイザー", "を", "作", "る", "。"]
+            vec![
+                "新",
+                "しい",
+                "Rust",
+                "の",
+                "トークナイザー",
+                "を",
+                "作",
+                "る",
+                "。"
+            ]
         );
         assert_coverage(s, &c);
     }

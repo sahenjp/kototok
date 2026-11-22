@@ -101,15 +101,9 @@ impl TrainPreset {
                 Self::AsymFull | Self::AsymNoPhase2 | Self::AsymNoPicky => 1.0,
                 _ => 0.0,
             },
-            picky_enabled: matches!(
-                self,
-                Self::AsymFull | Self::AsymNoPhase2 | Self::AsymNoAcsg
-            ),
+            picky_enabled: matches!(self, Self::AsymFull | Self::AsymNoPhase2 | Self::AsymNoAcsg),
             picky_ios_threshold: 0.90,
-            phase2_enabled: matches!(
-                self,
-                Self::AsymFull | Self::AsymNoPicky | Self::AsymNoAcsg
-            ),
+            phase2_enabled: matches!(self, Self::AsymFull | Self::AsymNoPicky | Self::AsymNoAcsg),
             phase1_vocab_ratio: 0.85,
             phase2_min_npmi: 0.25,
             special_tokens: Vec::new(),

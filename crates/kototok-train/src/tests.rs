@@ -28,10 +28,16 @@ fn fixture_corpus() -> String {
         // Identical repeated sentences -> deterministic continuation -> prunes.
         s.push_str("株式会社サンプルのシステムは安定稼働を続けている。\n");
         s.push_str("開発者が日本語のテキストを効率的に処理するための仕組みを設計した。\n");
-        s.push_str("送り仮名を含む動詞、例えば食べる、調べる、比べるは一つのチャンクとして扱われる。\n");
-        s.push_str(&format!("日本語の文章 {i}: 新しいトークナイザーは高速に動作する。\n"));
+        s.push_str(
+            "送り仮名を含む動詞、例えば食べる、調べる、比べるは一つのチャンクとして扱われる。\n",
+        );
+        s.push_str(&format!(
+            "日本語の文章 {i}: 新しいトークナイザーは高速に動作する。\n"
+        ));
         s.push_str("The quick brown fox jumps over the lazy dog repeatedly.\n");
-        s.push_str("Tokenization efficiency determines inference latency in production systems.\n\n");
+        s.push_str(
+            "Tokenization efficiency determines inference latency in production systems.\n\n",
+        );
     }
     assert!(s.len() >= 30 * 1024);
     s

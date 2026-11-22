@@ -217,9 +217,7 @@ fn run() -> Result<(), DynError> {
                 let byte_lens: Vec<usize> = spans.iter().map(|s| s.2 - s.1).collect();
                 let mut pieces = Vec::with_capacity(ids.len());
                 for &id in &ids {
-                    pieces.push(
-                        String::from_utf8_lossy(&tok.decode_bytes(&[id])?).into_owned(),
-                    );
+                    pieces.push(String::from_utf8_lossy(&tok.decode_bytes(&[id])?).into_owned());
                 }
                 println!(
                     "{}",
@@ -236,8 +234,7 @@ fn run() -> Result<(), DynError> {
                 println!("{}", tok.tokenize_pieces(&text)?.join("|"));
             } else {
                 let _ = ids; // `--ids` is the default human output.
-                let out: Vec<String> =
-                    tok.encode(&text)?.iter().map(u32::to_string).collect();
+                let out: Vec<String> = tok.encode(&text)?.iter().map(u32::to_string).collect();
                 println!("{}", out.join(" "));
             }
             Ok(())

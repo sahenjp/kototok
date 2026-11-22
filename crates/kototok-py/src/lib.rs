@@ -32,7 +32,8 @@ impl PyTokenizer {
 
     /// Encode `text` to final token ids.
     fn encode(&self, py: Python<'_>, text: &str) -> PyResult<Vec<u32>> {
-        py.allow_threads(|| self.inner.encode(text)).map_err(to_value_err)
+        py.allow_threads(|| self.inner.encode(text))
+            .map_err(to_value_err)
     }
 
     /// Encode `text` to `(token_id, byte_start, byte_end)` tuples.
@@ -87,7 +88,10 @@ impl PyTokenizer {
     }
 
     fn __repr__(&self) -> String {
-        format!("kototok.Tokenizer(vocab_size={})", self.inner.model().vocab_size())
+        format!(
+            "kototok.Tokenizer(vocab_size={})",
+            self.inner.model().vocab_size()
+        )
     }
 }
 

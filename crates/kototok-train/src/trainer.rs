@@ -373,7 +373,9 @@ impl Trainer {
                 self.total_pairs -= oc * weight;
                 self.total_pairs += nc * weight;
             }
-            if nc == 0 && let Some(set) = self.pair_to_words.get_mut(&p) {
+            if nc == 0
+                && let Some(set) = self.pair_to_words.get_mut(&p)
+            {
                 set.remove(&w);
             }
         }

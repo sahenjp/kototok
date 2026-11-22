@@ -72,10 +72,16 @@ fn classify_non_ascii(c: u32) -> ScriptClass {
         0x3041..=0x3096 | 0x309D..=0x309F => ScriptClass::Hiragana,
         0x30A1..=0x30FA | 0x30FD..=0x30FF | 0xFF66..=0xFF9F => ScriptClass::Katakana,
         0x30FC => ScriptClass::ProlongedMark,
-        0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF | 0x20000..=0x2FA1F | 0x3005..=0x3007 => {
-            ScriptClass::Kanji
-        }
-        0x3000..=0x3004 | 0x3008..=0x301F | 0xFF01..=0xFF0F | 0xFF1A..=0xFF20 | 0xFF3B..=0xFF40
+        0x4E00..=0x9FFF
+        | 0x3400..=0x4DBF
+        | 0xF900..=0xFAFF
+        | 0x20000..=0x2FA1F
+        | 0x3005..=0x3007 => ScriptClass::Kanji,
+        0x3000..=0x3004
+        | 0x3008..=0x301F
+        | 0xFF01..=0xFF0F
+        | 0xFF1A..=0xFF20
+        | 0xFF3B..=0xFF40
         | 0xFF5B..=0xFF65 => ScriptClass::JaPunct,
         0xFF10..=0xFF19 | 0xFF21..=0xFF3A | 0xFF41..=0xFF5A => ScriptClass::FullwidthAlnum,
         _ => match char::from_u32(c) {
@@ -167,10 +173,19 @@ mod tests {
 
     #[test]
     fn kanji_hiragana_cross() {
-        assert!(is_kanji_to_hiragana_cross("日本".as_bytes(), "の".as_bytes()));
+        assert!(is_kanji_to_hiragana_cross(
+            "日本".as_bytes(),
+            "の".as_bytes()
+        ));
         assert!(is_kanji_to_hiragana_cross("書".as_bytes(), "く".as_bytes()));
-        assert!(!is_kanji_to_hiragana_cross("あ".as_bytes(), "日".as_bytes()));
-        assert!(!is_kanji_to_hiragana_cross("日".as_bytes(), "カ".as_bytes()));
+        assert!(!is_kanji_to_hiragana_cross(
+            "あ".as_bytes(),
+            "日".as_bytes()
+        ));
+        assert!(!is_kanji_to_hiragana_cross(
+            "日".as_bytes(),
+            "カ".as_bytes()
+        ));
         assert!(!is_kanji_to_hiragana_cross(&[0xFF], "あ".as_bytes()));
         assert!(!is_kanji_to_hiragana_cross("".as_bytes(), "あ".as_bytes()));
     }

@@ -106,7 +106,7 @@ impl Tokenizer {
                         return Err(KototokError::InvalidFormat(format!(
                             "AtomicChar {} is not exactly one character",
                             tok.internal_id
-                        )))
+                        )));
                     }
                 }
             }
@@ -239,7 +239,11 @@ impl Tokenizer {
                 id,
                 order: pos,
                 prev: if pos == 0 { NIL } else { pos - 1 },
-                next: if pos + 1 == initial.len() { NIL } else { pos + 1 },
+                next: if pos + 1 == initial.len() {
+                    NIL
+                } else {
+                    pos + 1
+                },
                 alive: true,
             });
         }
@@ -555,9 +559,7 @@ impl Tokenizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        InternalToken, ModelMetadata, PreTokenizerConfig, TokenKind,
-    };
+    use crate::model::{InternalToken, ModelMetadata, PreTokenizerConfig, TokenKind};
     use crate::script::is_kanji_to_hiragana_cross;
 
     fn byte_tokens() -> Vec<InternalToken> {
@@ -778,10 +780,7 @@ mod tests {
         let model = base_model(vec![atomic(256, "あ")], vec![], 0);
         let tok = Tokenizer::from_model(model).unwrap();
         let spans = tok.encode_with_offsets("aあb").unwrap();
-        assert_eq!(
-            spans,
-            vec![(97, 0, 1), (256, 1, 4), (98, 4, 5)]
-        );
+        assert_eq!(spans, vec![(97, 0, 1), (256, 1, 4), (98, 4, 5)]);
         let pieces = tok.tokenize_pieces("aあb").unwrap();
         assert_eq!(pieces, vec!["a", "あ", "b"]);
     }
@@ -797,7 +796,10 @@ mod tests {
 
     #[test]
     fn kanji_hiragana_cross_helper() {
-        assert!(is_kanji_to_hiragana_cross("新".as_bytes(), "しい".as_bytes()));
+        assert!(is_kanji_to_hiragana_cross(
+            "新".as_bytes(),
+            "しい".as_bytes()
+        ));
     }
 
     mod proptests {

@@ -12,7 +12,7 @@
 
 use std::path::Path;
 
-use crate::model::{KototokError, Model, KTOK_FORMAT_VERSION, KTOK_MAGIC};
+use crate::model::{KTOK_FORMAT_VERSION, KTOK_MAGIC, KototokError, Model};
 
 const HEADER_LEN: usize = 4 + 4 + 8;
 
@@ -95,9 +95,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{
-        InternalToken, ModelMetadata, PreTokenizerConfig, TokenKind, VocabEvent,
-    };
+    use crate::model::{InternalToken, ModelMetadata, PreTokenizerConfig, TokenKind, VocabEvent};
 
     fn toy_model() -> Model {
         Model {
