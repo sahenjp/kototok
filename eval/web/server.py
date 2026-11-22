@@ -61,7 +61,7 @@ def load_models():
         return (name,
                 lambda text: [p.replace("▁", "␣") for p in sp_tok.encode(text, out_type=str)])
 
-    loaders.append(ktok("kototok 200k (s3n-refined)", "kototok_s3n_r2_200k.ktok"))
+    loaders.append(ktok("kototok 200k (s3n-BKO)", "kototok_s3n_g_200k.ktok"))
     EXT = EVAL_DIR / "artifacts_real" / "external"
     loaders.append(sp("sarashina2 (102k)", EXT / "sarashina2_tokenizer.model"))
     loaders.append(hf("llm-jp", EXT / "llmjp_tokenizer.json"))

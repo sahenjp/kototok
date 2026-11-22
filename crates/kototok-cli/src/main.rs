@@ -10,7 +10,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
-use kototok_core::{KototokError, Model, Tokenizer, VocabEvent};
+use kototok_core::{InternalToken, KototokError, Model, TokenKind, Tokenizer, VocabEvent};
 use kototok_train::{TrainPreset, train};
 
 #[derive(Parser)]
@@ -151,6 +151,10 @@ enum Command {
         /// Minimum boundary violations before pruning a merge.
         #[arg(long, default_value_t = 1)]
         min_violations: usize,
+        /// Minimum occurrences of an under-merged gold token before grafting
+        /// new merge events that produce it (`0` disables grafting).
+        #[arg(long, default_value_t = 1)]
+        min_graft_freq: usize,
     },
     /// Time `encode` throughput on an input file.
     Bench {
@@ -371,7 +375,8 @@ fn run() -> Result<(), DynError> {
             gold,
             output,
             min_violations,
-        } => refine_model(&model, &gold, &output, min_violations),
+            min_graft_freq,
+        } => refine_model(&model, &gold, &output, min_violations, min_graft_freq),
         Command::Bench {
             model,
             input,
@@ -453,17 +458,21 @@ fn read_text(input: Option<&Path>, text: Option<String>) -> io::Result<String> {
     Ok(buf)
 }
 
-/// Boundary-aligned merge surgery (Aligned BPE-Knockout).
+/// Boundary-aligned bidirectional merge surgery (Aligned BPE-Knockout).
 ///
-/// Encodes the gold set, attributes every predicted piece that strictly
-/// contains a gold internal boundary (or cuts inside an okurigana word) to
-/// the merge event that produced it, and inserts a `Prune` event right
-/// after that merge. Post-hoc: no retraining needed.
+/// Phase A (prune): attributes every predicted piece that strictly contains
+/// a gold internal boundary to the merge event that produced it, and
+/// inserts a `Prune` event right after that merge.
+/// Phase B (graft): finds gold tokens the model under-merges (predicted
+/// pieces strictly inside a gold token span) and appends merge events that
+/// produce the whole word — a post-hoc vocabulary *repair*, not just
+/// deletion. Post-hoc: no retraining needed.
 fn refine_model(
     model_path: &Path,
     gold_path: &Path,
     out_path: &Path,
     min_violations: usize,
+    min_graft_freq: usize,
 ) -> Result<(), DynError> {
     let mut model = Model::load_auto(model_path)?;
     let tok = Tokenizer::from_model(model.clone())?;
@@ -490,6 +499,9 @@ fn refine_model(
     // internal_id -> (occurrences, violations)
     let mut stats: std::collections::HashMap<u32, (usize, usize)> =
         std::collections::HashMap::new();
+    // token bytes -> (frequency, internal-id chain producing it)
+    let mut graft_map: std::collections::HashMap<Vec<u8>, (usize, Vec<u32>)> =
+        std::collections::HashMap::new();
     let mut n_lines = 0usize;
     for line in fs::read_to_string(gold_path)?
         .lines()
@@ -504,6 +516,18 @@ fn refine_model(
         }
         n_lines += 1;
         let text_len = text.len();
+
+        let gold_tokens: Vec<(usize, usize)> = v["byte_spans"]
+            .as_array()
+            .map(|spans| {
+                spans
+                    .iter()
+                    .filter_map(|s| {
+                        Some((s[0].as_u64()? as usize, s[1].as_u64()? as usize))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let mut gbounds: Vec<usize> = v["byte_spans"]
             .as_array()
@@ -543,8 +567,8 @@ fn refine_model(
         let Ok(pieces) = tok.encode_with_offsets(text) else {
             continue;
         };
-        for (fid, s, e) in pieces {
-            let Some(&iid) = fid_to_internal.get(&fid) else {
+        for (fid, s, e) in &pieces {
+            let Some(&iid) = fid_to_internal.get(fid) else {
                 continue;
             };
             let ent = stats.entry(iid).or_default();
@@ -552,9 +576,41 @@ fn refine_model(
             // Over-merge: the piece strictly contains a gold boundary. Under-
             // merging (splitting inside oku words) is NOT prunable — it needs
             // more merges, not fewer.
-            let crosses = gbounds.iter().any(|&b| s < b && b < e);
+            let crosses = gbounds.iter().any(|&b| *s < b && b < *e);
             if crosses {
                 ent.1 += 1;
+            }
+        }
+
+        // Phase B collection: gold tokens the model under-merges — covered
+        // by >=2 predicted pieces that tile the span exactly.
+        if min_graft_freq > 0 {
+            for &(gs, ge) in &gold_tokens {
+                let mut expect = gs;
+                let mut inside: Vec<u32> = Vec::new();
+                let mut tiled = true;
+                for (fid, s, e) in &pieces {
+                    if *s < gs || *e > ge {
+                        continue;
+                    }
+                    if *s != expect {
+                        tiled = false;
+                        break;
+                    }
+                    expect = *e;
+                    match fid_to_internal.get(fid) {
+                        Some(&iid) => inside.push(iid),
+                        None => {
+                            tiled = false;
+                            break;
+                        }
+                    }
+                }
+                if tiled && expect == ge && inside.len() >= 2 {
+                    let key = text.as_bytes()[gs..ge].to_vec();
+                    let ent = graft_map.entry(key).or_insert((0, inside));
+                    ent.0 += 1;
+                }
             }
         }
     }
@@ -588,6 +644,17 @@ fn refine_model(
     }
     inserts.sort_by_key(|(idx, _)| std::cmp::Reverse(*idx));
 
+    let pruned_targets: std::collections::HashSet<u32> = inserts
+        .iter()
+        .filter_map(|(_, ev)| {
+            if let VocabEvent::Prune { target, .. } = ev {
+                Some(*target)
+            } else {
+                None
+            }
+        })
+        .collect();
+
     let phase2 = model.metadata.phase2_start_rank as usize;
     let before_phase2 = inserts.iter().filter(|(idx, _)| *idx <= phase2).count();
     let n_pruned = inserts.len();
@@ -596,12 +663,81 @@ fn refine_model(
     }
     model.metadata.phase2_start_rank += before_phase2 as u32;
     model.metadata.pruned_count += n_pruned;
+
+    // Phase B (graft): append merge events producing under-merged gold
+    // tokens. Appended at the end so they only fire where nothing else
+    // merges — surgical, never competing with learned vocab.
+    let mut pair_to_result: std::collections::HashMap<(u32, u32), u32> =
+        std::collections::HashMap::new();
+    for ev in &model.events {
+        if let VocabEvent::Merge {
+            left,
+            right,
+            result,
+        } = ev
+        {
+            pair_to_result.insert((*left, *right), *result);
+        }
+    }
+    let mut next_iid = model.internal_tokens.len() as u32;
+    let mut next_fid = model
+        .internal_tokens
+        .iter()
+        .filter_map(|t| t.final_id)
+        .max()
+        .map_or(0, |m| m + 1);
+    let mut graft_list: Vec<_> = graft_map.into_iter().collect();
+    graft_list.sort_by_key(|(_, (f, _))| std::cmp::Reverse(*f));
+    let mut n_grafts = 0usize;
+    for (_bytes, (freq, chain)) in graft_list {
+        if freq < min_graft_freq || chain.len() < 2 {
+            continue;
+        }
+        if chain.iter().any(|c| pruned_targets.contains(c)) {
+            continue;
+        }
+        let mut cur = chain[0];
+        for &r in &chain[1..] {
+            if let Some(&res) = pair_to_result.get(&(cur, r)) {
+                cur = res;
+                continue;
+            }
+            let bytes = [
+                model.internal_tokens[cur as usize].bytes.as_slice(),
+                model.internal_tokens[r as usize].bytes.as_slice(),
+            ]
+            .concat();
+            model.internal_tokens.push(InternalToken {
+                internal_id: next_iid,
+                bytes,
+                kind: TokenKind::MergedPhase2,
+                // Real final_id: a partial chain may surface this token in
+                // other contexts, and emitting it must be legal.
+                final_id: Some(next_fid),
+            });
+            pair_to_result.insert((cur, r), next_iid);
+            model.events.push(VocabEvent::Merge {
+                left: cur,
+                right: r,
+                result: next_iid,
+            });
+            cur = next_iid;
+            next_iid += 1;
+            next_fid += 1;
+            n_grafts += 1;
+        }
+    }
+    model.metadata.vocab_size = next_fid as usize;
+
     model.metadata.name = format!("{}-refined", model.metadata.name);
     model.metadata.train_notes = format!(
-        "aligned-BKO: {n_pruned} merges pruned via {n_lines} gold sentences"
+        "aligned-BKO: {n_pruned} prunes + {n_grafts} grafts via {n_lines} gold sentences"
     );
     model.save_binary(out_path)?;
-    println!("refined: pruned {n_pruned} merges ({n_lines} gold lines) -> {}", out_path.display());
+    println!(
+        "refined: {n_pruned} prunes + {n_grafts} grafts ({n_lines} gold lines) -> {}",
+        out_path.display()
+    );
     Ok(())
 }
 
