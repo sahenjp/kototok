@@ -4,6 +4,7 @@ members = [
     "crates/kototok-core",
     "crates/kototok-train",
     "crates/kototok-cli",
+    "crates/kototok-py",
 ]
 
 [workspace.package]

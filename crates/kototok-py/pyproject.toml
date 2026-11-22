@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
+
+[project]
+name = "kototok"
+version = "0.1.0"
+description = "AsymScript-BPE: Japanese-optimized, dictionary-free, zero-invalid-UTF-8, worst-case O(N) tokenizer"
+readme = "../../README.md"
+requires-python = ">=3.9"
+license = "MIT OR Apache-2.0"
+
+[tool.maturin]
+bindings = "pyo3"
+module-name = "kototok"

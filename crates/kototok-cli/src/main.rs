@@ -1,3 +1,386 @@
-fn main() {
-    println!("kototok CLI stub");
+//! `kototok` CLI: train / encode / decode / inspect / viz / bench.
+
+use std::fs;
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::str::FromStr;
+use std::time::Instant;
+
+use clap::{Parser, Subcommand};
+use rayon::prelude::*;
+
+use kototok_core::{KototokError, Model, Tokenizer};
+use kototok_train::{TrainPreset, train};
+
+#[derive(Parser)]
+#[command(name = "kototok", version, about = "kototok: AsymScript-BPE tokenizer")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Train a tokenizer model on a UTF-8 corpus.
+    Train {
+        /// Corpus text file.
+        #[arg(long)]
+        input: PathBuf,
+        /// Output `.ktok` model path.
+        #[arg(long)]
+        output: PathBuf,
+        /// Optional JSON export of the model.
+        #[arg(long)]
+        json_out: Option<PathBuf>,
+        /// Maximum vocabulary size.
+        #[arg(long, default_value_t = 4096)]
+        vocab_size: usize,
+        /// Ablation preset.
+        #[arg(long, default_value = "asym-full", value_parser = parse_preset)]
+        preset: TrainPreset,
+        /// Override ACSG NPMI exponent (`0` disables ACSG).
+        #[arg(long)]
+        beta: Option<f64>,
+        /// Override PickyBPE IoS threshold.
+        #[arg(long)]
+        picky_threshold: Option<f64>,
+        /// Override Phase-1 vocabulary ratio.
+        #[arg(long)]
+        phase1_ratio: Option<f64>,
+        /// Override Phase-2 minimum NPMI.
+        #[arg(long)]
+        phase2_min_npmi: Option<f64>,
+        /// Override minimum char frequency for `AtomicChar`.
+        #[arg(long)]
+        min_char_freq: Option<u64>,
+        /// Override minimum pair frequency.
+        #[arg(long)]
+        min_pair_freq: Option<u64>,
+        /// Rayon worker threads (0 = default pool size).
+        #[arg(long)]
+        threads: Option<usize>,
+    },
+    /// Encode text to token ids / pieces.
+    Encode {
+        /// Model path (`.ktok` or `.json`).
+        #[arg(long)]
+        model: PathBuf,
+        /// Input text file (stdin when `--text` is absent too).
+        #[arg(long)]
+        input: Option<PathBuf>,
+        /// Literal text to encode.
+        #[arg(long)]
+        text: Option<String>,
+        /// Print space-separated ids.
+        #[arg(long)]
+        ids: bool,
+        /// Print `|`-separated pieces.
+        #[arg(long)]
+        pieces: bool,
+        /// Emit the eval JSON schema.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Decode comma-separated final token ids.
+    Decode {
+        #[arg(long)]
+        model: PathBuf,
+        /// e.g. `--ids 104,105,256`.
+        #[arg(long)]
+        ids: String,
+    },
+    /// Print the model's UTF-8 audit report.
+    Inspect {
+        #[arg(long)]
+        model: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Visualize tokenization pieces for a text.
+    Viz {
+        #[arg(long)]
+        model: PathBuf,
+        #[arg(long)]
+        text: String,
+    },
+    /// Time `encode` throughput on an input file.
+    Bench {
+        #[arg(long)]
+        model: PathBuf,
+        #[arg(long)]
+        input: PathBuf,
+        /// Parallel chunk encoding workers (1 = single-threaded).
+        #[arg(long, default_value_t = 1)]
+        threads: usize,
+        /// Timed iterations after one warmup.
+        #[arg(long, default_value_t = 5)]
+        iters: usize,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+fn parse_preset(s: &str) -> Result<TrainPreset, String> {
+    TrainPreset::from_str(s)
+}
+
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+type DynError = Box<dyn std::error::Error>;
+
+fn run() -> Result<(), DynError> {
+    let cli = Cli::parse();
+    match cli.command {
+        Command::Train {
+            input,
+            output,
+            json_out,
+            vocab_size,
+            preset,
+            beta,
+            picky_threshold,
+            phase1_ratio,
+            phase2_min_npmi,
+            min_char_freq,
+            min_pair_freq,
+            threads,
+        } => {
+            if let Some(t) = threads
+                && t > 0
+            {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(t)
+                    .build_global()
+                    .ok();
+            }
+            let bytes = fs::read(&input)?;
+            let corpus = String::from_utf8_lossy(&bytes);
+            let mut cfg = preset.config(vocab_size);
+            if let Some(v) = beta {
+                cfg.acsg_npmi_beta = v;
+            }
+            if let Some(v) = picky_threshold {
+                cfg.picky_ios_threshold = v;
+            }
+            if let Some(v) = phase1_ratio {
+                cfg.phase1_vocab_ratio = v;
+            }
+            if let Some(v) = phase2_min_npmi {
+                cfg.phase2_min_npmi = v;
+            }
+            if let Some(v) = min_char_freq {
+                cfg.min_char_freq = v;
+            }
+            if let Some(v) = min_pair_freq {
+                cfg.min_pair_freq = v;
+            }
+            let model = train(&corpus, &cfg)?;
+            model.save_binary(&output)?;
+            if let Some(path) = &json_out {
+                model.save_json(path)?;
+            }
+            let audit = model.audit_utf8_validity();
+            eprintln!(
+                "trained '{}': alive={} pruned={} events={} phase1_vocab={} phase2_rank={} invalid_utf8={}",
+                cfg.name,
+                audit.alive_vocab_size,
+                audit.pruned_tokens,
+                model.events.len(),
+                model.metadata.phase1_vocab_size,
+                model.metadata.phase2_start_rank,
+                audit.invalid_utf8_learned_tokens,
+            );
+            Ok(())
+        }
+        Command::Encode {
+            model,
+            input,
+            text,
+            ids,
+            pieces,
+            json,
+        } => {
+            let tok = load_tokenizer(&model)?;
+            let text = read_text(input.as_deref(), text)?;
+            if json {
+                let spans = tok.encode_with_offsets(&text)?;
+                let ids: Vec<u32> = spans.iter().map(|s| s.0).collect();
+                let byte_lens: Vec<usize> = spans.iter().map(|s| s.2 - s.1).collect();
+                let mut pieces = Vec::with_capacity(ids.len());
+                for &id in &ids {
+                    pieces.push(
+                        String::from_utf8_lossy(&tok.decode_bytes(&[id])?).into_owned(),
+                    );
+                }
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "ids": ids,
+                        "pieces": pieces,
+                        "byte_lens": byte_lens,
+                        "token_count": ids.len(),
+                        "byte_count": text.len(),
+                        "char_count": text.chars().count(),
+                    })
+                );
+            } else if pieces {
+                println!("{}", tok.tokenize_pieces(&text)?.join("|"));
+            } else {
+                let _ = ids; // `--ids` is the default human output.
+                let out: Vec<String> =
+                    tok.encode(&text)?.iter().map(u32::to_string).collect();
+                println!("{}", out.join(" "));
+            }
+            Ok(())
+        }
+        Command::Decode { model, ids } => {
+            let tok = load_tokenizer(&model)?;
+            let ids: Vec<u32> = ids
+                .split(',')
+                .filter(|s| !s.trim().is_empty())
+                .map(|s| s.trim().parse::<u32>())
+                .collect::<Result<_, _>>()?;
+            println!("{}", tok.decode(&ids)?);
+            Ok(())
+        }
+        Command::Inspect { model, json } => {
+            let model = Model::load_auto(&model)?;
+            let audit = model.audit_utf8_validity();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&audit)?);
+            } else {
+                println!("name: {}", model.metadata.name);
+                println!("events: {}", model.events.len());
+                println!("{audit:#?}");
+            }
+            Ok(())
+        }
+        Command::Viz { model, text } => {
+            let tok = load_tokenizer(&model)?;
+            let pieces = tok.tokenize_pieces(&text)?;
+            let chars = text.chars().count();
+            println!("{}", pieces.join("|"));
+            println!("tokens: {}", pieces.len());
+            println!("chars: {chars}");
+            println!(
+                "chars/token: {:.4}",
+                if pieces.is_empty() {
+                    0.0
+                } else {
+                    chars as f64 / pieces.len() as f64
+                }
+            );
+            Ok(())
+        }
+        Command::Bench {
+            model,
+            input,
+            threads,
+            iters,
+            json,
+        } => {
+            if threads > 1 {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build_global()
+                    .ok();
+            }
+            let tok = load_tokenizer(&model)?;
+            let text = fs::read_to_string(&input)?;
+
+            // Warmup (also produces the reference token count).
+            let tokens = tok.encode(&text)?.len();
+
+            let start = Instant::now();
+            if threads > 1 {
+                let blocks = line_blocks(&text, threads * 8);
+                for _ in 0..iters.max(1) {
+                    let lens: Vec<usize> = blocks
+                        .par_iter()
+                        .map(|b| tok.encode(b).map(|v| v.len()))
+                        .collect::<Result<_, KototokError>>()?;
+                    std::hint::black_box(lens);
+                }
+            } else {
+                for _ in 0..iters.max(1) {
+                    std::hint::black_box(tok.encode(&text)?);
+                }
+            }
+            let total_secs = start.elapsed().as_secs_f64();
+            let iters = iters.max(1);
+            let mb_per_sec = text.len() as f64 * iters as f64 / total_secs / 1e6;
+            let tokens_per_sec = tokens as f64 * iters as f64 / total_secs;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "threads": threads,
+                        "bytes": text.len(),
+                        "tokens": tokens,
+                        "iters": iters,
+                        "total_secs": total_secs,
+                        "mb_per_sec": mb_per_sec,
+                        "tokens_per_sec": tokens_per_sec,
+                    })
+                );
+            } else {
+                println!("threads: {threads}");
+                println!("bytes: {}", text.len());
+                println!("tokens: {tokens}");
+                println!("iters: {iters}");
+                println!("total_secs: {total_secs:.4}");
+                println!("mb_per_sec: {mb_per_sec:.2}");
+                println!("tokens_per_sec: {tokens_per_sec:.0}");
+            }
+            Ok(())
+        }
+    }
+}
+
+fn load_tokenizer(path: &Path) -> Result<Tokenizer, KototokError> {
+    Tokenizer::from_model(Model::load_auto(path)?)
+}
+
+fn read_text(input: Option<&Path>, text: Option<String>) -> io::Result<String> {
+    if let Some(t) = text {
+        return Ok(t);
+    }
+    if let Some(p) = input {
+        return fs::read_to_string(p);
+    }
+    let mut buf = String::new();
+    io::stdin().read_to_string(&mut buf)?;
+    Ok(buf)
+}
+
+/// Line-aligned, char-boundary-safe block splitter for parallel bench.
+fn line_blocks(text: &str, max_blocks: usize) -> Vec<&str> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let target = (text.len() / max_blocks.max(1)).max(1);
+    let mut blocks = Vec::new();
+    let mut start = 0usize;
+    while start < text.len() {
+        let mut want = (start + target).min(text.len());
+        while want < text.len() && !text.is_char_boundary(want) {
+            want += 1;
+        }
+        let end = match text[want..].find('\n') {
+            Some(off) => want + off + 1,
+            None => text.len(),
+        };
+        blocks.push(&text[start..end]);
+        start = end;
+    }
+    blocks
 }

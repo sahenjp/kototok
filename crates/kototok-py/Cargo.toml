@@ -1,0 +1,15 @@
+[package]
+name = "kototok-py"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "kototok"
+crate-type = ["cdylib"]
+
+[dependencies]
+kototok-core = { path = "../kototok-core" }
+kototok-train = { path = "../kototok-train" }
+pyo3 = { version = "0.25", features = ["extension-module"] }
+rayon.workspace = true
