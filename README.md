@@ -193,3 +193,17 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
 ## ライセンス
 
 [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE) のデュアルライセンス。
+
+## Evaluation methodology notes
+
+- Boundary metrics are measured on two gold sets: (1) 150 hand-curated
+  sentences (held-out split: 50) and (2) a Sudachi-auto-generated set
+  of 3000 jawiki sentences (surgery 2500 / held-out 500). Reported F1
+  is the held-out portion only; Sudachi gold segments more aggressively,
+  so its F1 scale is lower and not comparable to the hand-gold numbers.
+- External-comparison metrics were computed on the full 150-line hand
+  gold; kototok refined models additionally report held-out scores.
+- Sarashina3's published 2.0 chars/token uses a different, non-public
+  test set; comparisons treat it as a target, not a matched benchmark.
+- Casual/SNS text coverage was measured on a synthetic edge set;
+  domain grafts improve it but gemma2 remains stronger there.
