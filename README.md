@@ -1,7 +1,7 @@
 # kototok（AsymScript-BPE）
 
 kototok は、日本語・英語・コードが混在する入力向けの Rust 製サブワードトークナイザーであり、辞書不要・学習時の不正 UTF-8 学習トークン 0（UTF-8 原子性不変条件）・最悪 O(N) の完全可逆エンコードを実現します。
-形式仕様、不変条件、および計算量証明の詳細は [docs/ALGORITHM.md](docs/ALGORITHM.md) を参照してください。
+形式仕様、不変条件、および計算量証明の詳細は [docs/ALGORITHM.md](docs/ALGORITHM.md) を参照してください。専門知識のない読者向けの解説は [docs/slides/index.html](docs/slides/index.html) にあります。
 
 ## 主な結果
 
