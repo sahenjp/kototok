@@ -625,9 +625,7 @@ fn refine_model(
             if let Some(okus) = v["okurigana_words"].as_array() {
                 for o in okus {
                     if let Some(sp) = o["byte_span"].as_array() {
-                        if let (Some(a), Some(b)) =
-                            (sp[0].as_u64(), sp[1].as_u64())
-                        {
+                        if let (Some(a), Some(b)) = (sp[0].as_u64(), sp[1].as_u64()) {
                             gbounds.push(a as usize);
                             gbounds.push(b as usize);
                         }
