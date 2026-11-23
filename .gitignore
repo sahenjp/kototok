@@ -3,9 +3,19 @@ Cargo.lock
 eval/.venv
 eval/__pycache__
 eval/**/__pycache__
-eval/artifacts*
+# Eval artifacts: reports, charts, and result JSON stay tracked so the
+# README links resolve on a fresh clone; bulky inputs and derived assets
+# (corpora, trained models, download caches, HF exports, sweeps) do not.
+eval/artifacts*/data/
+eval/artifacts*/models/
+eval/artifacts*/external/
+eval/artifacts*/hf_export/
+eval/artifacts*/.fetch_cache/
+eval/artifacts*/sweep_results.json
+eval/artifacts_tune/
 /pylib
 *.ktok
+!models/*.ktok
 *.profraw
 .DS_Store
 *.tsuzuri/

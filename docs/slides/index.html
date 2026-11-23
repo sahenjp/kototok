@@ -1106,7 +1106,7 @@
             </div>
             <ul class="clean-list">
               <li>
-                <strong>不正 UTF-8 ゼロ（0%）：</strong>文字の途中でバイト列をちぎらない学習設計により、壊れたトークンを一切作りません。
+                <strong>不正 UTF-8 ゼロ（学習時）：</strong>文字の途中でバイト列をちぎらない設計により、学習では壊れたトークンを一切作りません（配布モデルの事後修復層には最大 0.4% の断片ピースが残りますが、復元は常に完全に一致します）。
               </li>
               <li>
                 <strong>完全可逆：</strong>切り分けたかけらを戻せば、元の文章と 1 文字も違わず復元できます。
@@ -1248,7 +1248,7 @@
     <section class="slide" data-section="成果② 小ささ" aria-label="スライド7：少ないかけらで済む">
       <header class="slide-header">
         <span class="kicker">06 / 成果②：少ないかけらで済む</span>
-        <h2>日本語だけでなく、測った 7 分野すべてでトップの圧縮効率</h2>
+        <h2>日本語だけでなく、測った 7 分野すべてで外部最良を超える圧縮効率</h2>
       </header>
 
       <div class="slide-body">
@@ -1399,13 +1399,13 @@
             </div>
 
             <div class="card" style="flex:1;display:flex;flex-direction:column;justify-content:center;">
-              <div class="kpi-title">壊れた文字トークンの混入率</div>
+              <div class="kpi-title">壊れた文字トークンの混入率（学習時）</div>
               <div style="display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;">
                 <span class="kpi-val">0%</span>
                 <span class="pill-muted">不正 UTF-8 ゼロ</span>
               </div>
               <p class="kpi-desc">
-                一般的なバイト単位 BPE（例：32k 実データでの hf-bpe は 2.17%）と違い、途中で文字化けするトークンを学習語彙に一切含みません。
+                一般的なバイト単位 BPE（例：32k 実データでの hf-bpe は 2.17%）と違い、途中で文字化けするトークンを学習では一切作りません。配布モデルの事後修復層には断片ピースが最大 0.4% 残りますが、復元は常に完全一致です。
               </p>
             </div>
           </div>
@@ -1509,7 +1509,7 @@
               <div style="font-weight:800;font-size:16px;margin-bottom:10px;">今日覚えて帰る 3 つのポイント</div>
               <ul class="clean-list">
                 <li><strong>正しく切る：</strong>辞書なしで境界 F1 <strong>0.852</strong>、名詞＋助詞の誤結合は <strong>0.5%</strong>。</li>
-                <li><strong>小さく速い：</strong>日本語 <strong>5.79 B/T</strong>、韓国語・中国語など 7 分野すべてで外部最良超え、速度 <strong>約 65 MB/s</strong>、不正 UTF-8 <strong>0%</strong>。</li>
+                <li><strong>小さく速い：</strong>日本語 <strong>5.79 B/T</strong>、韓国語・中国語など測った 7 分野すべてで外部最良超え、速度 <strong>約 65 MB/s</strong>、不正 UTF-8 <strong>0%</strong>（学習時）。</li>
                 <li><strong>正直な現在地：</strong>1 ファイルで 3 モード切替に対応。簡易テストでは sarashina2 に <strong>0.3%</strong> 差で、本格的な言語モデル学習で検証を継続中。</li>
               </ul>
             </div>

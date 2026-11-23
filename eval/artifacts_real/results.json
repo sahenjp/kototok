@@ -1,0 +1,602 @@
+{
+  "vocab_size": 32768,
+  "baselines_only": false,
+  "results": [
+    {
+      "label": "kototok:asym-full",
+      "kind": "kototok",
+      "preset": "asym-full",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 77629,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.7536,
+          "bytes_per_token": 4.8074
+        },
+        "en_prose": {
+          "tokens": 40572,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 4.3405,
+          "bytes_per_token": 4.5105
+        },
+        "code": {
+          "tokens": 46386,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 4.2456,
+          "bytes_per_token": 4.2456
+        },
+        "mixed_ja_code": {
+          "tokens": 16970,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 3.5336,
+          "bytes_per_token": 3.99
+        }
+      },
+      "utf8_audit": {
+        "alive_vocab_size": 32768,
+        "alive_non_fallback_tokens": 32640,
+        "byte_fallback_tokens": 128,
+        "pruned_tokens": 589,
+        "phase1_merged_alive": 20788,
+        "phase2_merged_alive": 8192,
+        "invalid_utf8_learned_tokens": 0,
+        "invalid_utf8_rate_pct": 0.0
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.8306,
+        "boundary_recall": 0.9593,
+        "boundary_f1": 0.8903,
+        "okurigana_integrity_pct": 55.1,
+        "noun_particle_overmerge_pct": 0.25,
+        "okurigana_intact_count": 135,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 1,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 52.85,
+      "used_tokens_on_test": 15449,
+      "ja_throughput_mb_s": 73.63,
+      "adversarial_1mb_ms": 9.04,
+      "adversarial_1mb_mb_s": 116.0
+    },
+    {
+      "label": "kototok:asym-no-phase2",
+      "kind": "kototok",
+      "preset": "asym-no-phase2",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 79187,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.7191,
+          "bytes_per_token": 4.7128
+        },
+        "en_prose": {
+          "tokens": 51967,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.3887,
+          "bytes_per_token": 3.5215
+        },
+        "code": {
+          "tokens": 60750,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 3.2417,
+          "bytes_per_token": 3.2418
+        },
+        "mixed_ja_code": {
+          "tokens": 20376,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 2.943,
+          "bytes_per_token": 3.323
+        }
+      },
+      "utf8_audit": {
+        "alive_vocab_size": 32768,
+        "alive_non_fallback_tokens": 32640,
+        "byte_fallback_tokens": 128,
+        "pruned_tokens": 996,
+        "phase1_merged_alive": 28980,
+        "phase2_merged_alive": 0,
+        "invalid_utf8_learned_tokens": 0,
+        "invalid_utf8_rate_pct": 0.0
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.7859,
+        "boundary_recall": 0.9332,
+        "boundary_f1": 0.8532,
+        "okurigana_integrity_pct": 36.33,
+        "noun_particle_overmerge_pct": 7.02,
+        "okurigana_intact_count": 89,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 28,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 56.86,
+      "used_tokens_on_test": 14135,
+      "ja_throughput_mb_s": 78.48,
+      "adversarial_1mb_ms": 9.1,
+      "adversarial_1mb_mb_s": 115.19
+    },
+    {
+      "label": "kototok:asym-no-picky",
+      "kind": "kototok",
+      "preset": "asym-no-picky",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 77146,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.7646,
+          "bytes_per_token": 4.8375
+        },
+        "en_prose": {
+          "tokens": 41204,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 4.2739,
+          "bytes_per_token": 4.4414
+        },
+        "code": {
+          "tokens": 45915,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 4.2891,
+          "bytes_per_token": 4.2892
+        },
+        "mixed_ja_code": {
+          "tokens": 16836,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 3.5618,
+          "bytes_per_token": 4.0217
+        }
+      },
+      "utf8_audit": {
+        "alive_vocab_size": 32768,
+        "alive_non_fallback_tokens": 32640,
+        "byte_fallback_tokens": 128,
+        "pruned_tokens": 0,
+        "phase1_merged_alive": 24065,
+        "phase2_merged_alive": 4915,
+        "invalid_utf8_learned_tokens": 0,
+        "invalid_utf8_rate_pct": 0.0
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.7624,
+        "boundary_recall": 0.9022,
+        "boundary_f1": 0.8264,
+        "okurigana_integrity_pct": 31.43,
+        "noun_particle_overmerge_pct": 8.77,
+        "okurigana_intact_count": 77,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 35,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 52.05,
+      "used_tokens_on_test": 15712,
+      "ja_throughput_mb_s": 76.03,
+      "adversarial_1mb_ms": 8.96,
+      "adversarial_1mb_mb_s": 117.03
+    },
+    {
+      "label": "kototok:asym-no-acsg",
+      "kind": "kototok",
+      "preset": "asym-no-acsg",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 76705,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.7747,
+          "bytes_per_token": 4.8653
+        },
+        "en_prose": {
+          "tokens": 41798,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 4.2131,
+          "bytes_per_token": 4.3782
+        },
+        "code": {
+          "tokens": 46188,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 4.2638,
+          "bytes_per_token": 4.2638
+        },
+        "mixed_ja_code": {
+          "tokens": 16877,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 3.5531,
+          "bytes_per_token": 4.012
+        }
+      },
+      "utf8_audit": {
+        "alive_vocab_size": 32768,
+        "alive_non_fallback_tokens": 32640,
+        "byte_fallback_tokens": 128,
+        "pruned_tokens": 660,
+        "phase1_merged_alive": 24065,
+        "phase2_merged_alive": 4915,
+        "invalid_utf8_learned_tokens": 0,
+        "invalid_utf8_rate_pct": 0.0
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.7528,
+        "boundary_recall": 0.8264,
+        "boundary_f1": 0.7879,
+        "okurigana_integrity_pct": 46.53,
+        "noun_particle_overmerge_pct": 38.35,
+        "okurigana_intact_count": 114,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 153,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 50.24,
+      "used_tokens_on_test": 16305,
+      "ja_throughput_mb_s": 76.86,
+      "adversarial_1mb_ms": 8.73,
+      "adversarial_1mb_mb_s": 120.08
+    },
+    {
+      "label": "kototok:strict-script",
+      "kind": "kototok",
+      "preset": "strict-script",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 83069,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.6388,
+          "bytes_per_token": 4.4925
+        },
+        "en_prose": {
+          "tokens": 51987,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.3874,
+          "bytes_per_token": 3.5201
+        },
+        "code": {
+          "tokens": 60747,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 3.2419,
+          "bytes_per_token": 3.2419
+        },
+        "mixed_ja_code": {
+          "tokens": 20507,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 2.9242,
+          "bytes_per_token": 3.3018
+        }
+      },
+      "utf8_audit": {
+        "alive_vocab_size": 32768,
+        "alive_non_fallback_tokens": 32640,
+        "byte_fallback_tokens": 128,
+        "pruned_tokens": 0,
+        "phase1_merged_alive": 28980,
+        "phase2_merged_alive": 0,
+        "invalid_utf8_learned_tokens": 0,
+        "invalid_utf8_rate_pct": 0.0
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.7353,
+        "boundary_recall": 0.9576,
+        "boundary_f1": 0.8319,
+        "okurigana_integrity_pct": 0.0,
+        "noun_particle_overmerge_pct": 0.0,
+        "okurigana_intact_count": 0,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 0,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 58.5,
+      "used_tokens_on_test": 13599,
+      "ja_throughput_mb_s": 90.92,
+      "adversarial_1mb_ms": 6.05,
+      "adversarial_1mb_mb_s": 173.28
+    },
+    {
+      "label": "kototok:standard-bbpe",
+      "kind": "kototok",
+      "preset": "standard-bbpe",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 77945,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.7465,
+          "bytes_per_token": 4.7879
+        },
+        "en_prose": {
+          "tokens": 52175,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.3752,
+          "bytes_per_token": 3.5075
+        },
+        "code": {
+          "tokens": 61070,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 3.2247,
+          "bytes_per_token": 3.2248
+        },
+        "mixed_ja_code": {
+          "tokens": 20420,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 2.9366,
+          "bytes_per_token": 3.3159
+        }
+      },
+      "utf8_audit": {
+        "alive_vocab_size": 32768,
+        "alive_non_fallback_tokens": 32640,
+        "byte_fallback_tokens": 128,
+        "pruned_tokens": 0,
+        "phase1_merged_alive": 32512,
+        "phase2_merged_alive": 0,
+        "invalid_utf8_learned_tokens": 701,
+        "invalid_utf8_rate_pct": 2.15
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.7059,
+        "boundary_recall": 0.7726,
+        "boundary_f1": 0.7377,
+        "okurigana_integrity_pct": 38.37,
+        "noun_particle_overmerge_pct": 19.55,
+        "okurigana_intact_count": 94,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 78,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 53.36,
+      "used_tokens_on_test": 15284,
+      "ja_throughput_mb_s": 116.78,
+      "adversarial_1mb_ms": 31.02,
+      "adversarial_1mb_mb_s": 33.8
+    },
+    {
+      "label": "hf-bpe",
+      "kind": "baseline",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 76309,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.7839,
+          "bytes_per_token": 4.8905
+        },
+        "en_prose": {
+          "tokens": 50464,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.4896,
+          "bytes_per_token": 3.6264
+        },
+        "code": {
+          "tokens": 55949,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 3.5199,
+          "bytes_per_token": 3.5199
+        },
+        "mixed_ja_code": {
+          "tokens": 18951,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 3.1643,
+          "bytes_per_token": 3.5729
+        }
+      },
+      "utf8_audit": {
+        "alive_non_fallback_tokens": 32512,
+        "invalid_utf8_learned_tokens": 705,
+        "invalid_utf8_rate_pct": 2.17
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.708,
+        "boundary_recall": 0.7726,
+        "boundary_f1": 0.7389,
+        "okurigana_integrity_pct": 38.37,
+        "noun_particle_overmerge_pct": 19.55,
+        "okurigana_intact_count": 94,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 78,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 52.69,
+      "used_tokens_on_test": 15501,
+      "ja_throughput_mb_s": 3.31,
+      "adversarial_1mb_ms": 391.49,
+      "adversarial_1mb_mb_s": 2.68
+    },
+    {
+      "label": "hf-unigram",
+      "kind": "baseline",
+      "vocab_size": 32768,
+      "compression": {
+        "ja_prose": {
+          "tokens": 81729,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.6656,
+          "bytes_per_token": 4.5662
+        },
+        "en_prose": {
+          "tokens": 46059,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.8234,
+          "bytes_per_token": 3.9732
+        },
+        "code": {
+          "tokens": 61568,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 3.1987,
+          "bytes_per_token": 3.1987
+        },
+        "mixed_ja_code": {
+          "tokens": 21038,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 2.8504,
+          "bytes_per_token": 3.2185
+        }
+      },
+      "utf8_audit": {
+        "alive_non_fallback_tokens": 32767,
+        "invalid_utf8_learned_tokens": 0,
+        "invalid_utf8_rate_pct": 0.0
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.7753,
+        "boundary_recall": 0.8859,
+        "boundary_f1": 0.8269,
+        "okurigana_integrity_pct": 43.67,
+        "noun_particle_overmerge_pct": 11.28,
+        "okurigana_intact_count": 107,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 45,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 54.07,
+      "used_tokens_on_test": 15051,
+      "ja_throughput_mb_s": 5.98,
+      "adversarial_1mb_ms": 273.37,
+      "adversarial_1mb_mb_s": 3.84
+    },
+    {
+      "label": "tiktoken:cl100k_base (external-100k)",
+      "kind": "external",
+      "vocab_size": 100277,
+      "compression": {
+        "ja_prose": {
+          "tokens": 149813,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 0.9087,
+          "bytes_per_token": 2.491
+        },
+        "en_prose": {
+          "tokens": 44641,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.9448,
+          "bytes_per_token": 4.0994
+        },
+        "code": {
+          "tokens": 45055,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 4.371,
+          "bytes_per_token": 4.371
+        },
+        "mixed_ja_code": {
+          "tokens": 18305,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 3.2759,
+          "bytes_per_token": 3.699
+        }
+      },
+      "utf8_audit": {
+        "alive_non_fallback_tokens": 100000,
+        "invalid_utf8_learned_tokens": 645,
+        "invalid_utf8_rate_pct": 0.65
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.4262,
+        "boundary_recall": 0.9951,
+        "boundary_f1": 0.5968,
+        "okurigana_integrity_pct": 0.0,
+        "noun_particle_overmerge_pct": 0.0,
+        "okurigana_intact_count": 0,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 0,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 89.11,
+      "used_tokens_on_test": 10924,
+      "ja_throughput_mb_s": 16.46,
+      "adversarial_1mb_ms": 78.77,
+      "adversarial_1mb_mb_s": 13.31
+    },
+    {
+      "label": "tiktoken:o200k_base (external-200k)",
+      "kind": "external",
+      "vocab_size": 200019,
+      "compression": {
+        "ja_prose": {
+          "tokens": 108676,
+          "chars": 136130,
+          "bytes": 373190,
+          "chars_per_token": 1.2526,
+          "bytes_per_token": 3.434
+        },
+        "en_prose": {
+          "tokens": 44505,
+          "chars": 176101,
+          "bytes": 183002,
+          "chars_per_token": 3.9569,
+          "bytes_per_token": 4.1119
+        },
+        "code": {
+          "tokens": 45274,
+          "chars": 196935,
+          "bytes": 196937,
+          "chars_per_token": 4.3498,
+          "bytes_per_token": 4.3499
+        },
+        "mixed_ja_code": {
+          "tokens": 17162,
+          "chars": 59966,
+          "bytes": 67710,
+          "chars_per_token": 3.4941,
+          "bytes_per_token": 3.9453
+        }
+      },
+      "utf8_audit": {
+        "alive_non_fallback_tokens": 199742,
+        "invalid_utf8_learned_tokens": 1434,
+        "invalid_utf8_rate_pct": 0.72
+      },
+      "ja_boundary": {
+        "boundary_precision": 0.5971,
+        "boundary_recall": 0.9845,
+        "boundary_f1": 0.7434,
+        "okurigana_integrity_pct": 2.45,
+        "noun_particle_overmerge_pct": 0.75,
+        "okurigana_intact_count": 6,
+        "okurigana_total_count": 245,
+        "noun_particle_overmerge_count": 3,
+        "noun_particle_total_count": 399
+      },
+      "dead_token_rate_pct": 93.64,
+      "used_tokens_on_test": 12727,
+      "ja_throughput_mb_s": 18.09,
+      "adversarial_1mb_ms": 75.84,
+      "adversarial_1mb_mb_s": 13.83
+    }
+  ]
+}

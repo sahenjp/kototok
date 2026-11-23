@@ -67,7 +67,7 @@ KOTOTOK_MODELS: list[tuple[str, str, list[str] | None]] = [
 ]
 
 EXTERNAL_SP = ["sarashina2", "plamo", "gemma2", "mistral"]
-EXTERNAL_HF = ["llm-jp", "llama3", "qwen2.5", "deepseek"]
+EXTERNAL_HF = ["llm-jp", "llama3", "qwen2.5", "deepseek", "inkling2"]
 EXTERNAL_TIK = ["o200k_base", "cl100k_base"]
 
 EXTERNAL_FILES = {
@@ -79,6 +79,7 @@ EXTERNAL_FILES = {
     "llama3": "llama3_tokenizer.json",
     "qwen2.5": "qwen25_tokenizer.json",
     "deepseek": "deepseek_tokenizer.json",
+    "inkling2": "inkling2_tokenizer.json",
 }
 
 EncodeFn = Callable[[str], list[int]]

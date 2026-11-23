@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<title>kototok benchmark — vocab_size=32768</title>
+<style>
+body{font-family:-apple-system,'Segoe UI',sans-serif;background:#0f141a;color:#e6edf3;max-width:960px;margin:24px auto;padding:0 16px}
+h1{font-size:20px} h3{font-size:14px;margin:18px 0 8px;color:#c9d4df}
+.chart{margin-bottom:8px}
+.row{display:flex;align-items:center;gap:8px;margin:3px 0;font-size:12px}
+.lbl{flex:0 0 110px;text-align:right;color:#aeb9c5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.barwrap{flex:1;background:#1c232c;border-radius:3px;height:16px;display:block}
+.bar{display:block;height:16px;border-radius:3px}
+.val{flex:0 0 130px;font-variant-numeric:tabular-nums}
+.best{color:#7ee787;font-size:10px;font-weight:700}
+.legend{font-size:12px;color:#aeb9c5;margin:8px 0 20px}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 12px;vertical-align:-1px}
+.note{font-size:11px;color:#6b7683}
+</style></head><body>
+<h1>kototok benchmark — vocab_size=32768 — 10 models</h1>
+<div class="legend">
+<span class="sw" style="background:#4f9cf9"></span>kototok
+<span class="sw" style="background:#9aa4b2"></span>same-vocab baseline (HF)
+<span class="sw" style="background:#f2a65a"></span>external (tiktoken, 100k/200k vocab — not directly comparable)
+</div>
+<div class="chart"><h3>JA compression — chars/token (higher = better)</h3>
+<div class="row"><span class="lbl" title="kototok:asym-full">asym-full</span><span class="barwrap"><span class="bar" style="width:98.30%;background:#4f9cf9"></span></span><span class="val">1.75</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-phase2">no-phase2</span><span class="barwrap"><span class="bar" style="width:96.37%;background:#4f9cf9"></span></span><span class="val">1.72</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-picky">no-picky</span><span class="barwrap"><span class="bar" style="width:98.92%;background:#4f9cf9"></span></span><span class="val">1.76</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-acsg">no-acsg</span><span class="barwrap"><span class="bar" style="width:99.48%;background:#4f9cf9"></span></span><span class="val">1.77</span></div>
+<div class="row"><span class="lbl" title="kototok:strict-script">strict-script</span><span class="barwrap"><span class="bar" style="width:91.87%;background:#4f9cf9"></span></span><span class="val">1.64</span></div>
+<div class="row"><span class="lbl" title="kototok:standard-bbpe">std-bbpe</span><span class="barwrap"><span class="bar" style="width:97.90%;background:#4f9cf9"></span></span><span class="val">1.75</span></div>
+<div class="row"><span class="lbl" title="hf-bpe">hf-bpe</span><span class="barwrap"><span class="bar" style="width:100.00%;background:#9aa4b2"></span></span><span class="val">1.78 <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="hf-unigram">hf-unigram</span><span class="barwrap"><span class="bar" style="width:93.37%;background:#9aa4b2"></span></span><span class="val">1.67</span></div>
+<div class="row"><span class="lbl" title="tiktoken:cl100k_base (external-100k)">cl100k*</span><span class="barwrap"><span class="bar" style="width:50.94%;background:#f2a65a"></span></span><span class="val">0.91</span></div>
+<div class="row"><span class="lbl" title="tiktoken:o200k_base (external-200k)">o200k*</span><span class="barwrap"><span class="bar" style="width:70.22%;background:#f2a65a"></span></span><span class="val">1.25</span></div>
+</div><div class="chart"><h3>JA boundary F1 vs Sudachi gold (higher = better)</h3>
+<div class="row"><span class="lbl" title="kototok:asym-full">asym-full</span><span class="barwrap"><span class="bar" style="width:100.00%;background:#4f9cf9"></span></span><span class="val">0.890 <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-phase2">no-phase2</span><span class="barwrap"><span class="bar" style="width:95.83%;background:#4f9cf9"></span></span><span class="val">0.853</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-picky">no-picky</span><span class="barwrap"><span class="bar" style="width:92.82%;background:#4f9cf9"></span></span><span class="val">0.826</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-acsg">no-acsg</span><span class="barwrap"><span class="bar" style="width:88.50%;background:#4f9cf9"></span></span><span class="val">0.788</span></div>
+<div class="row"><span class="lbl" title="kototok:strict-script">strict-script</span><span class="barwrap"><span class="bar" style="width:93.44%;background:#4f9cf9"></span></span><span class="val">0.832</span></div>
+<div class="row"><span class="lbl" title="kototok:standard-bbpe">std-bbpe</span><span class="barwrap"><span class="bar" style="width:82.86%;background:#4f9cf9"></span></span><span class="val">0.738</span></div>
+<div class="row"><span class="lbl" title="hf-bpe">hf-bpe</span><span class="barwrap"><span class="bar" style="width:82.99%;background:#9aa4b2"></span></span><span class="val">0.739</span></div>
+<div class="row"><span class="lbl" title="hf-unigram">hf-unigram</span><span class="barwrap"><span class="bar" style="width:92.88%;background:#9aa4b2"></span></span><span class="val">0.827</span></div>
+<div class="row"><span class="lbl" title="tiktoken:cl100k_base (external-100k)">cl100k*</span><span class="barwrap"><span class="bar" style="width:67.03%;background:#f2a65a"></span></span><span class="val">0.597</span></div>
+<div class="row"><span class="lbl" title="tiktoken:o200k_base (external-200k)">o200k*</span><span class="barwrap"><span class="bar" style="width:83.50%;background:#f2a65a"></span></span><span class="val">0.743</span></div>
+</div><div class="chart"><h3>Okurigana integrity % (higher = better)</h3>
+<div class="row"><span class="lbl" title="kototok:asym-full">asym-full</span><span class="barwrap"><span class="bar" style="width:100.00%;background:#4f9cf9"></span></span><span class="val">55.1% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-phase2">no-phase2</span><span class="barwrap"><span class="bar" style="width:65.93%;background:#4f9cf9"></span></span><span class="val">36.3%</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-picky">no-picky</span><span class="barwrap"><span class="bar" style="width:57.04%;background:#4f9cf9"></span></span><span class="val">31.4%</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-acsg">no-acsg</span><span class="barwrap"><span class="bar" style="width:84.45%;background:#4f9cf9"></span></span><span class="val">46.5%</span></div>
+<div class="row"><span class="lbl" title="kototok:strict-script">strict-script</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#4f9cf9"></span></span><span class="val">0.0%</span></div>
+<div class="row"><span class="lbl" title="kototok:standard-bbpe">std-bbpe</span><span class="barwrap"><span class="bar" style="width:69.64%;background:#4f9cf9"></span></span><span class="val">38.4%</span></div>
+<div class="row"><span class="lbl" title="hf-bpe">hf-bpe</span><span class="barwrap"><span class="bar" style="width:69.64%;background:#9aa4b2"></span></span><span class="val">38.4%</span></div>
+<div class="row"><span class="lbl" title="hf-unigram">hf-unigram</span><span class="barwrap"><span class="bar" style="width:79.26%;background:#9aa4b2"></span></span><span class="val">43.7%</span></div>
+<div class="row"><span class="lbl" title="tiktoken:cl100k_base (external-100k)">cl100k*</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#f2a65a"></span></span><span class="val">0.0%</span></div>
+<div class="row"><span class="lbl" title="tiktoken:o200k_base (external-200k)">o200k*</span><span class="barwrap"><span class="bar" style="width:4.45%;background:#f2a65a"></span></span><span class="val">2.5%</span></div>
+</div><div class="chart"><h3>Invalid UTF-8 learned tokens % (lower = better)</h3>
+<div class="row"><span class="lbl" title="kototok:asym-full">asym-full</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#4f9cf9"></span></span><span class="val">0.00% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-phase2">no-phase2</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#4f9cf9"></span></span><span class="val">0.00% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-picky">no-picky</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#4f9cf9"></span></span><span class="val">0.00% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-acsg">no-acsg</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#4f9cf9"></span></span><span class="val">0.00% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:strict-script">strict-script</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#4f9cf9"></span></span><span class="val">0.00% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:standard-bbpe">std-bbpe</span><span class="barwrap"><span class="bar" style="width:99.08%;background:#4f9cf9"></span></span><span class="val">2.15%</span></div>
+<div class="row"><span class="lbl" title="hf-bpe">hf-bpe</span><span class="barwrap"><span class="bar" style="width:100.00%;background:#9aa4b2"></span></span><span class="val">2.17%</span></div>
+<div class="row"><span class="lbl" title="hf-unigram">hf-unigram</span><span class="barwrap"><span class="bar" style="width:0.50%;background:#9aa4b2"></span></span><span class="val">0.00% <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="tiktoken:cl100k_base (external-100k)">cl100k*</span><span class="barwrap"><span class="bar" style="width:29.95%;background:#f2a65a"></span></span><span class="val">0.65%</span></div>
+<div class="row"><span class="lbl" title="tiktoken:o200k_base (external-200k)">o200k*</span><span class="barwrap"><span class="bar" style="width:33.18%;background:#f2a65a"></span></span><span class="val">0.72%</span></div>
+</div><div class="chart"><h3>JA throughput MB/s (higher = better)</h3>
+<div class="row"><span class="lbl" title="kototok:asym-full">asym-full</span><span class="barwrap"><span class="bar" style="width:63.05%;background:#4f9cf9"></span></span><span class="val">73.6</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-phase2">no-phase2</span><span class="barwrap"><span class="bar" style="width:67.20%;background:#4f9cf9"></span></span><span class="val">78.5</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-picky">no-picky</span><span class="barwrap"><span class="bar" style="width:65.11%;background:#4f9cf9"></span></span><span class="val">76.0</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-acsg">no-acsg</span><span class="barwrap"><span class="bar" style="width:65.82%;background:#4f9cf9"></span></span><span class="val">76.9</span></div>
+<div class="row"><span class="lbl" title="kototok:strict-script">strict-script</span><span class="barwrap"><span class="bar" style="width:77.86%;background:#4f9cf9"></span></span><span class="val">90.9</span></div>
+<div class="row"><span class="lbl" title="kototok:standard-bbpe">std-bbpe</span><span class="barwrap"><span class="bar" style="width:100.00%;background:#4f9cf9"></span></span><span class="val">116.8 <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="hf-bpe">hf-bpe</span><span class="barwrap"><span class="bar" style="width:2.83%;background:#9aa4b2"></span></span><span class="val">3.3</span></div>
+<div class="row"><span class="lbl" title="hf-unigram">hf-unigram</span><span class="barwrap"><span class="bar" style="width:5.12%;background:#9aa4b2"></span></span><span class="val">6.0</span></div>
+<div class="row"><span class="lbl" title="tiktoken:cl100k_base (external-100k)">cl100k*</span><span class="barwrap"><span class="bar" style="width:14.09%;background:#f2a65a"></span></span><span class="val">16.5</span></div>
+<div class="row"><span class="lbl" title="tiktoken:o200k_base (external-200k)">o200k*</span><span class="barwrap"><span class="bar" style="width:15.49%;background:#f2a65a"></span></span><span class="val">18.1</span></div>
+</div><div class="chart"><h3>Adversarial 1 MiB latency ms (lower = better)</h3>
+<div class="row"><span class="lbl" title="kototok:asym-full">asym-full</span><span class="barwrap"><span class="bar" style="width:2.31%;background:#4f9cf9"></span></span><span class="val">9.0</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-phase2">no-phase2</span><span class="barwrap"><span class="bar" style="width:2.32%;background:#4f9cf9"></span></span><span class="val">9.1</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-picky">no-picky</span><span class="barwrap"><span class="bar" style="width:2.29%;background:#4f9cf9"></span></span><span class="val">9.0</span></div>
+<div class="row"><span class="lbl" title="kototok:asym-no-acsg">no-acsg</span><span class="barwrap"><span class="bar" style="width:2.23%;background:#4f9cf9"></span></span><span class="val">8.7</span></div>
+<div class="row"><span class="lbl" title="kototok:strict-script">strict-script</span><span class="barwrap"><span class="bar" style="width:1.55%;background:#4f9cf9"></span></span><span class="val">6.0 <span class="best">BEST</span></span></div>
+<div class="row"><span class="lbl" title="kototok:standard-bbpe">std-bbpe</span><span class="barwrap"><span class="bar" style="width:7.92%;background:#4f9cf9"></span></span><span class="val">31.0</span></div>
+<div class="row"><span class="lbl" title="hf-bpe">hf-bpe</span><span class="barwrap"><span class="bar" style="width:100.00%;background:#9aa4b2"></span></span><span class="val">391.5</span></div>
+<div class="row"><span class="lbl" title="hf-unigram">hf-unigram</span><span class="barwrap"><span class="bar" style="width:69.83%;background:#9aa4b2"></span></span><span class="val">273.4</span></div>
+<div class="row"><span class="lbl" title="tiktoken:cl100k_base (external-100k)">cl100k*</span><span class="barwrap"><span class="bar" style="width:20.12%;background:#f2a65a"></span></span><span class="val">78.8</span></div>
+<div class="row"><span class="lbl" title="tiktoken:o200k_base (external-200k)">o200k*</span><span class="barwrap"><span class="bar" style="width:19.37%;background:#f2a65a"></span></span><span class="val">75.8</span></div>
+</div>
+<p class="note">* cl100k_base / o200k_base are production 100k–200k-vocab tokenizers shown for reference only.
+Same-corpus 4k-vocab comparison is among the other 8 rows. Generated from eval/artifacts/results.json.</p>
+</body></html>

@@ -1,13 +1,13 @@
 # kototok（AsymScript-BPE）
 
-kototok は、日本語・英語・コードが混在する入力向けの Rust 製サブワードトークナイザーであり、辞書不要・学習済み語彙の不正 UTF-8 ゼロ・最悪 O(N) の完全可逆エンコードを実現します。
+kototok は、日本語・英語・コードが混在する入力向けの Rust 製サブワードトークナイザーであり、辞書不要・学習時の不正 UTF-8 学習トークン 0（UTF-8 原子性不変条件）・最悪 O(N) の完全可逆エンコードを実現します。
 形式仕様、不変条件、および計算量証明の詳細は [docs/ALGORITHM.md](docs/ALGORITHM.md) を参照してください。
 
 ## 主な結果
 
 817MB コーパスで学習した 200k モデルでは、非対称前処理と境界エントロピーゲート（BEG）および外科的語彙修復により、高い日本語形態素境界品質と各言語の圧縮効率を両立しています。
 
-- コード向け前処理拡張版の 200k モデル `kototok 200k (s3h)` は、JA 圧縮（held-out 2.179 chars/token）、EN 圧縮（4.356 chars/token）、Code 圧縮（5.380 bytes/token）、Mixed 圧縮（4.913 bytes/token）、150 文 hand-gold の形態素境界 F1（0.9361）、送り仮名保持率（91.43%）、名詞+助詞 過結合率（0.25%）、エンコード速度（~65 MB/s）の 8 軸で比較対象の外部モデルを上回りました。
+- コード向け前処理拡張版の 200k モデル `kototok 200k (s3h)` は、JA 圧縮（held-out 2.179 chars/token）、EN 圧縮（4.356 chars/token）、Code 圧縮（5.380 bytes/token）、Mixed 圧縮（4.913 bytes/token）、150 文 hand-gold の形態素境界 F1（0.9361）、送り仮名保持率（91.43%）、名詞+助詞 過結合率（0.25%）、エンコード速度（~65 MB/s）の 8 軸で、同一テストセット上で実測した外部モデルの各指標最良値を上回りました（JA 圧縮の参照点である Sarashina3 公開値は別テストセットの目標値として扱います）。
 - kototok v2-T（kototok_v2s_200k.ktok）は単一ファイル内にタグ付き層を内蔵し、okuedge 層を含めた strict プロファイルで Sudachi gold 500 文 holdout の境界 F1 0.864・送り仮名保持 88.9%・過結合 0.4% を達成します（独立辞書 UniDic でも境界 F1 0.852・送り仮名 89.0%・過結合 0.5%）。
 - 多言語対応の kototok v2-BKO3（kototok_v2_bko3_200k.ktok）は、bytes/token 基準で JA prose 5.79、Korean 未見 wiki 3.75、Chinese 未見 wiki 4.01 の圧縮率を示し、jawiki 64MiB 上の trigram-LM 代理評価では kototok 5 モデルが上位 7 枠中 5 枠を占めます（最良 1.437 bits/byte、sarashina2 と 0.004 bits/byte 差）。
 
@@ -50,7 +50,7 @@ Selectable-Segmentation（v2-T、`kototok_v2s_200k.ktok`）は、`.ktok` の語�
 
 ### 多言語混合と事後 graft
 
-多言語対応モデルの `kototok_v2_bko3_200k.ktok`（41.6MB）は、KO/ZH Wikipedia と口語文を学習コーパスへ混入した v2 モデル（776MB、vocab 200k）に対し、Sudachi gold 3 万行相当（JA 15,000・口語 400・KO/ZH 7,136）で Aligned BPE-Knockout（1,328 prune + 64,498 graft）を適用して構築しています。
+多言語対応モデルの `kototok_v2_bko3_200k.ktok`（41.6MB）は、KO/ZH Wikipedia と口語文を学習コーパスへ混入した v2 モデル（776MB、vocab 200k）に対し、JA/口語は Sudachi gold、KO/ZH は whitespace・jieba 由来の gold を用いた Aligned BPE-Knockout（1,328 prune + 64,498 graft。モデル内メタデータ記録では gold 17,536 文に適用）を実施して構築しています。
 KO/ZH の学習時混入だけでは未見文の圧縮が 2.88 / 3.49 B/T にとどまるのに対し、gold 境界からの事後 graft によって 3.75 / 4.01 B/T まで伸びており、Aligned BPE-Knockout は gold さえあれば任意言語の語彙を後付けで増設できる機構として機能します。
 
 ## 評価
@@ -71,17 +71,17 @@ KO/ZH の学習時混入だけでは未見文の圧縮が 2.88 / 3.49 B/T にと
 
 | 指標 | asym-full | hf-bpe | cl100k* |
 | --- | ---: | ---: | ---: |
-| JA 圧縮 (chars/token) | 1.751 | 1.784 | 0.909 |
-| EN 圧縮 (chars/token) | **4.014** | 3.490 | 3.945 |
-| 形態素境界 F1 | **0.8864** | 0.7389 | 0.5968 |
+| JA 圧縮 (chars/token) | 1.754 | 1.784 | 0.909 |
+| EN 圧縮 (chars/token) | **4.340** | 3.490 | 3.945 |
+| 形態素境界 F1 | **0.8903** | 0.7389 | 0.5968 |
 | 名詞+助詞 過結合率 | **0.25%** | 19.55% | 0.00% |
-| 送り仮名保持率 | **53.88%** | 38.37% | 0.00% |
+| 送り仮名保持率 | **55.10%** | 38.37% | 0.00% |
 | 不正 UTF-8 学習トークン率 | **0.00%** | 2.17% | 0.65% |
-| JA スループット | **41.8 MB/s** | 2.7 | 15.6 |
-| 敵対的 1 MiB レイテンシ | **12.4 ms** | 430 | 69 |
+| JA スループット | **73.6 MB/s** | 3.3 | 16.5 |
+| 敵対的 1 MiB レイテンシ | **9.0 ms** | 391 | 79 |
 
-BEG は過結合を 0.25% まで抑えながら送り仮名 53.9% を保持し、形態素境界 F1 は 0.8864（hf-bpe +14.7pt、hf-unigram +6.0pt）に達しました（なお tiktoken の過結合 0% は、日本語をほとんど結合せず送り仮名保持が 0% となる退化点です）。
-クラス別 Phase-2 により EN 圧縮（4.014）は語彙 3〜6 倍の cl100k（3.945）と o200k（3.957）を上回り、JA 圧縮は助詞を分割する代償として hf-bpe との 1.8% 差（1.751 vs 1.784）にとどめ、不正 UTF-8 トークン 0%（hf-bpe は 2.17%）も 32k 語彙で維持しています。
+BEG は過結合を 0.25% まで抑えながら送り仮名 55.1% を保持し、形態素境界 F1 は 0.8903（hf-bpe +15.1pt、hf-unigram +6.3pt）に達しました（なお tiktoken の過結合 0% は、日本語をほとんど結合せず送り仮名保持が 0% となる退化点です）。
+クラス別 Phase-2 により EN 圧縮（4.340）は語彙 3〜6 倍の cl100k（3.945）と o200k（3.957）を上回り、JA 圧縮は助詞を分割する代償として hf-bpe との 1.7% 差（1.754 vs 1.784）にとどめ、不正 UTF-8 トークン 0%（hf-bpe は 2.17%）も 32k 語彙で維持しています。
 なお表中の `cl100k*` は 100k–200k 語彙の外部参照であり、同語彙サイズ同士の直接比較は上表の `hf-bpe` 列（および全結果レポートの `hf-*` 行）を参照してください（参考として 4k/32k 合成データ評価の対照値も以下に示します）。
 
 | 指標 | vocab 4k: asym-full / hf-bpe | vocab 32k: asym-full / hf-bpe |
@@ -96,7 +96,7 @@ BEG は過結合を 0.25% まで抑えながら送り仮名 53.9% を保持し�
 #### 200k モデルと外部トークナイザー横断比較
 
 最終コーパス（jawiki 記事 440MB + 青空文庫 31.7MB + 既存 22.3MB［前節の ja.wikipedia + Gutenberg + OSS code］ + enwiki 記事 120MB + OSS code/docs ≈ 200MB ≈ 817MB）で学習した `asym-full`（語彙 200,000）は、同一レジスタの held-out jawiki 45.3M chars で 2.1287 chars/token を記録しました。
-これは Sarashina3（API 専用・トークナイザー非公開）の公開実績値「日本語 Wikipedia 約19億文字 → 約9.5億トークン」= 2.0 chars/token と比べて -6.4% のトークン数に相当します。
+これは Sarashina3（API 専用・トークナイザー非公開）の公開実績値「日本語 Wikipedia 約19億文字 → 約9.5億トークン」= 2.0 chars/token と比べて +6.4% の chars/token に相当します（同一テキストならトークン数で約 -6.0%。ただし Sarashina3 の公開値は非公開テストセット上の数値であり、同一条件の直接比較ではありません）。
 
 | 指標 | sarashina2 (102k) | tiktoken o200k | sarashina3 (公開値) | kototok asym-full (200k) | 勝者 |
 | --- | ---: | ---: | ---: | ---: | --- |
@@ -110,19 +110,22 @@ BEG は過結合を 0.25% まで抑えながら送り仮名 53.9% を保持し�
 | 送り仮名保持率 | 91.02% | — | — | **91.43%** | kototok |
 | 不正 UTF-8 学習トークン率 | — | — | — | **0.00%** | kototok |
 
+表中の `sarashina3 (公開値)` 列は非公開テストセット上の公表値のため同一条件比較ではなく、JA held-out 行の「勝者」は公開値を目標値として上回った参考比較です。実測同一条件での比較は sarashina2・o200k の各行を参照してください。
 EN 圧縮でも `asym-full`（200k）は `tiktoken` o200k（3.9569）および cl100k（3.9448）を上回り、enwiki 無しの 709MB コーパスで学習した JA 特化モデル（holdout JA 2.1371・EN 3.814）と用途に応じて使い分けられます。
-さらに pretokenizer の「改行+インデント結合」「ASCII 句読点の右向き結合」とコード増量コーパス（817MB）を用いた `kototok 200k (s3h)` について、同一テストセットで公開外部トークナイザー 10 モデルを実測し、各指標の最良値（外部側いずれか 1 モデルがとった最高値）と 8 軸で比較した結果を示します（境界指標は 150 文 hand gold 計測）。
+さらに pretokenizer の「改行+インデント結合」「ASCII 句読点の右向き結合」とコード増量コーパス（817MB）を用いた `kototok 200k (s3h)` について、同一テストセットで公開外部トークナイザー 10 モデルを実測し、各指標の最良値（外部側いずれか 1 モデルがとった最高値）と 8 軸で比較した結果を示します（境界指標は 150 文 hand gold 計測。JA 圧縮のみ、測定不能な sarashina3 の公開値を参考値として併記します）。
 
 | 指標 | 最良の外部モデル | その値 | kototok 200k (s3h) | 勝者 |
 | --- | --- | ---: | ---: | --- |
-| JA 圧縮 held-out (chars/token) | sarashina3（公開値） | 2.0 | **2.179** | kototok (+8.9%) |
+| JA 圧縮 held-out (chars/token) | sarashina3（公開値・別テストセット） | 2.0 | **2.179** | kototok（参考比較 +8.9%） |
 | EN 圧縮 (chars/token) | tiktoken o200k | 3.957 | **4.356** | kototok (+10.1%) |
 | Code 圧縮 (bytes/token) | llama3 / cl100k | 4.37 | **5.380** | kototok (+23.1%) |
 | Mixed 圧縮 (bytes/token) | llama3 | 3.99 | **4.913** | kototok (+23.1%) |
-| 形態素境界 F1 | plamo | 0.8749 | **0.9361** | kototok (+6.9pt) |
+| 形態素境界 F1 | plamo | 0.8749 | **0.9361** | kototok (+6.1pt) |
 | 送り仮名保持率 | sarashina2 | 91.02% | **91.43%** | kototok |
-| 名詞+助詞 過結合率 | o200k | 0.75% | **0.25%** | kototok |
+| 名詞+助詞 過結合率 | o200k（非退化モデル中最良） | 0.75% | **0.25%** | kototok |
 | エンコード速度 (JA) | tiktoken o200k | 14.6 MB/s | **~65 MB/s** | kototok (4.5x) |
+
+過結合率では `cl100k` が 0.00% を記録しますが、これは日本語をほとんど結合しない退化点（送り仮名保持 0.00%・境界 F1 0.5968）で自明に達する値であり、結合を行うモデル間の比較対象からは外しています。
 
 #### 多言語モデルとポリシー切替の圧縮比較（bytes/token 基準）
 
@@ -134,9 +137,9 @@ EN 圧縮でも `asym-full`（200k）は `tiktoken` o200k（3.9569）および c
 | Korean 未見 wiki (381KB) | **3.75** | llama3 3.58 / o200k 3.58 | s3n-BKO5 3.60 |
 | Chinese 未見 wiki (101KB) | **4.01** | deepseek 3.77 | s3n-BKO5 3.65 |
 | Casual/SNS edge | **3.97** | gemma2 3.72 | s3n-BKO5 3.81 |
-| EN prose | **4.77** | — | s3n-BKO5 4.57 |
-| Code | **5.25** | — | s3n-BKO5 5.05 |
-| Mixed JA/code | **4.93** | — | s3n-BKO5 4.74 |
+| EN prose | **4.77** | o200k 4.11 | s3n-BKO5 4.57 |
+| Code | **5.25** | llama3 / cl100k 4.37 | s3n-BKO5 5.05 |
+| Mixed JA/code | **4.93** | o200k 3.99 | s3n-BKO5 4.74 |
 
 同一モデル `v2-T`（`okuedge` 層追加前の構成）で `strict` と `compress` を切り替えた場合の held-out 実測を示します（KO/ZH/JA/EN/code/mixed 行はいずれも bytes/token 単位）。
 
@@ -227,20 +230,40 @@ kototok は上位 7 枠中 5 枠を占めてすべての汎用多言語トーク
 | mistral | 1.730 | 147,947 (2.3x kototok) |
 | cl100k | 1.763 | 149,199 |
 
+## 配布モデル
+
+学習済みモデル 2 種を `models/` に同梱しています（`.ktok` バイナリ、クローン後そのまま `kototok encode/decode/inspect` や `Tokenizer.load` で利用可能）。
+
+| ファイル | サイズ | 内容 |
+| --- | ---: | --- |
+| `models/kototok_v2s_200k.ktok` | 44.7MB | v2 ベース（776MB コーパス・vocab 200k）に複数 refine を適用したポリシー切替モデル。`tag_ranges`（ja/casual/kozh/okuri/okuedge）+ `tagged_prunes`（okuedge 3,482 件）を内蔵し、alive vocab 281,630。`--mode strict`（既定）/ `--tags ja,casual,kozh,okuri`（balanced）を切替可能 |
+| `models/kototok_v2_bko3_200k.ktok` | 41.6MB | 同 v2 ベースに JA/口語の Sudachi gold と KO/ZH の whitespace・jieba gold で Aligned BPE-Knockout（1,328 prune + 64,498 graft、モデル内メタデータ記録の適用 gold は 17,536 文）を施した多言語モデル。alive vocab 264,498 |
+
+なお両モデルとも、学習時の UTF-8 原子性によりベースモデルの不正 UTF-8 学習トークンは 0 ですが、事後修復の graft 層が文字境界をまたぐバイト断片を中間ピースとして追加するため、`inspect` 上の `invalid_utf8_learned_tokens` は v2-T が 1,004 件（0.36%）、v2-BKO3 が 1,069 件（0.40%）となります。これらはエンコード時にそのまま出力され得る語彙内断片であり、decode はバイト列連接で復元するため完全可逆性には影響しません（配布モデルでも往復は完全に一致することを確認済み）。
+
+出所: いずれも本リポジトリの `kototok train`（`asym-full` ベースの v2 レシピ）で学習後、`kototok refine` で gold 境界修復を適用したものです。学習コーパスは ja.wikipedia（CC BY-SA）・enwiki・青空文庫・OSS コード、境界修復の gold は Sudachi / UniDic 系の分割に由来します。
+ライセンス: モデルファイル自体は本リポジトリと同一の MIT OR Apache-2.0 デュアルライセンスです。学習データ由来の制約（jawiki の CC BY-SA 等）は利用目的に応じて利用者側で確認してください。
+
+整合性チェックは同梱の `models/SHA256SUMS.txt` で検証できます。
+
+```bash
+sha256sum -c models/SHA256SUMS.txt
+```
+
 ## 再現手順
 
 ### ワークスペースと CLI 基本操作
 
 | クレート | 役割 |
 | --- | --- |
-| `crates/kototok-core` | DFA 前処理・エンコード/デコード・モデル定義（32 テスト） |
+| `crates/kototok-core` | DFA 前処理・エンコード/デコード・モデル定義（33 テスト） |
 | `crates/kototok-train` | Rayon 並列トレーナー（Phase-1 BPE + Phase-2 チャンク結合） |
 | `crates/kototok-cli` | `kototok` バイナリ（`train` / `encode` / `decode` / `inspect` / `viz` / `bench`） |
 | `crates/kototok-py` | PyO3 バインディング（`import kototok` で encode/decode/train） |
 
 ```bash
 cargo build --release          # バイナリ: target/release/kototok
-cargo test --workspace         # 全テスト（43 件）
+cargo test --workspace         # 全テスト（50 件・6 スイート）
 cargo clippy --workspace       # 警告ゼロ
 
 # 学習 → 検査 → エンコード
@@ -258,6 +281,16 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
   --phase2-min-npmi-okuri 0.0 --beg-okuri-boost 20
 ```
 
+学習コーパス `train_corpus_s3f.txt`（約 780MB）はリポジトリに同梱せず、次のコンポーネントをこの順に連結して構築しました。
+
+1. `eval/realdata_builder.py` が生成する `artifacts_real/data/train_corpus.txt`（22.3MB: ja.wikipedia + Gutenberg + OSS code）
+2. jawiki の pages-articles ダンプを `eval/jawiki_extract.py <dump.bz2> train_corpus_jw.txt` で平文化したもの（約 400MB 規模の記事テキスト）
+3. `eval/aozora_fetch.py --mb 30 --out aozora.txt`（青空文庫 約 31.7MB）
+4. `eval/enwiki_fetch.py --mb 120 --output enwiki.txt`（enwiki 記事 約 120MB）
+5. OSS のソースコード・ドキュメント類の結合テキスト（約 200MB。ライセンス上再配布可能なコードから任意に選定）
+
+`cat` で上記順に連結し、`eval/artifacts_real/data/train_corpus_s3f.txt` として配置すれば同一レシピで学習できます。なお 2〜5 の分量や語種比率で結果は変動するため、正確な再現には各成分の実測バイト数をそろえてください（README の評価節に記載の内訳を参照）。
+
 このレシピで学習したモデル（vocab 200,000）におけるエンコード例は次のとおりです。
 
 ```
@@ -273,7 +306,10 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
 PYO3_PYTHON=$(which python3) cargo build --release -p kototok-py
 cp target/release/libkototok.so pylib/kototok.so   # sys.path 上に置く
 # または maturin: cd crates/kototok-py && maturin develop --release
+# または pip（ABI タグ付きで目的の環境へインストール）: pip install ./crates/kototok-py
 ```
+
+拡張モジュールはビルド時の CPython バージョンに依存します（PyO3 はバージョン別バイナリを生成します）。インタプリタを更新・変更した場合（例: Python 3.13 用にビルドした `.so` を 3.14 で読み込む）はインポート失敗やクラッシュの原因になるため、他環境でビルド済みの `.so` は使い回さず、必ず利用中のインタプリタで再ビルドしてください。リポジトリにはビルド済み `.so` を同梱していないため、fresh clone では上記のビルド手順が必須です。
 
 ```python
 import kototok
@@ -319,7 +355,7 @@ python make_chart.py artifacts_real
 運用時のモデル選択では、多言語圧縮・送り仮名保持・下流言語モデルの予測コストの間にトレードオフが存在し、検証範囲にも今後の課題が残っています。
 
 - 多言語混合モデル（`v2-BKO3`）では KO/ZH 混入により日本語ネイティブの merge が薄まる構造的コストがあるため、送り仮名保持は `s3n-BKO5`（87.3%）のほうが高く（`v2-BKO3` は 82.9%）、送り仮名を最重視する用途では `s3n-BKO5`（または `v2-T` strict の 88.9%）を選びます。
-- 今後の課題として、trigram-LM 代理指標にとどまらないニューラル言語モデルでの下流検証、Casual/SNS 領域の評価セット拡充、および BEG・Aligned BPE-Knockout・`tag_ranges`・改行/ASCII 句読点の前処理拡張を [docs/ALGORITHM.md](docs/ALGORITHM.md) へ反映する作業が残っています。
+- 今後の課題として、trigram-LM 代理指標にとどまらないニューラル言語モデルでの下流検証（`eval/downstream_lm.py` で小規模 GPT の実訓練比較を準備中・未検証）および Casual/SNS 領域の評価セット拡充が残っています。
 
 ## ライセンス
 
