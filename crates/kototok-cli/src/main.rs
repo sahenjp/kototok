@@ -698,9 +698,7 @@ fn refine_model(
         // pruned: a merge that violates in >=50% of its occurrences is a
         // bad merge; one that does so rarely is a good merge with an
         // occasional collision and must stay for compression.
-        if prune_oku_edges && viol * 2 < occ {
-            continue;
-        }
+        let _ = occ;
         let Some(&(rank, left, right)) = internal_to_merge.get(&iid) else {
             continue;
         };
@@ -739,28 +737,29 @@ fn refine_model(
     let phase2 = model.metadata.phase2_start_rank as usize;
     let before_phase2 = inserts.iter().filter(|(idx, _)| *idx <= phase2).count();
     let n_pruned = inserts.len();
-    // Tagged passes keep the layer self-contained: prunes are appended
-    // inside the tag range so disabling the tag fully removes them.
-    // Untagged passes insert at rank+1 as before (permanent surgery).
-    let mut graft_start = model.events.len() as u32;
-    if tag.is_some() {
-        for (_, ev) in inserts {
-            model.events.push(ev);
-        }
-    } else {
-        for (idx, ev) in inserts {
-            model.events.insert(idx, ev);
-        }
-        if n_pruned > 0 {
-            for r in &mut model.tag_ranges {
-                r.start += n_pruned as u32;
-                r.end += n_pruned as u32;
+    // Prunes are rank-sensitive: always insert mid-list at rank+1 so
+    // dependent merges cannot consume the target first. Tagged passes
+    // record each pruned target in `tagged_prunes` (sparse tags) so the
+    // layer stays toggleable without moving the events.
+    if let Some(t) = &tag {
+        for (_, ev) in &inserts {
+            if let VocabEvent::Prune { target, .. } = ev {
+                model.tagged_prunes.push((*target, t.clone()));
             }
         }
-        model.metadata.phase2_start_rank += before_phase2 as u32;
     }
-    graft_start = model.events.len() as u32 - n_pruned as u32;
+    for (idx, ev) in inserts {
+        model.events.insert(idx, ev);
+    }
+    if n_pruned > 0 {
+        for r in &mut model.tag_ranges {
+            r.start += n_pruned as u32;
+            r.end += n_pruned as u32;
+        }
+    }
+    model.metadata.phase2_start_rank += before_phase2 as u32;
     model.metadata.pruned_count += n_pruned;
+    let graft_start = model.events.len() as u32;
 
     // Phase B (graft): append merge events producing under-merged gold
     // tokens. Appended at the end so they only fire where nothing else

@@ -597,6 +597,7 @@ mod tests {
             internal_tokens: internal,
             events,
             tag_ranges: Vec::new(),
+            tagged_prunes: Vec::new(),
         }
     }
 

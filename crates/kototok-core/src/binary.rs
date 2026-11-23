@@ -129,6 +129,7 @@ mod tests {
                 result: 256,
             }],
             tag_ranges: Vec::new(),
+            tagged_prunes: Vec::new(),
         }
     }
 

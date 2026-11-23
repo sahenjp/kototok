@@ -151,6 +151,12 @@ pub struct Model {
     /// models produced before tagging existed.
     #[serde(default)]
     pub tag_ranges: Vec<TagRange>,
+    /// Sparse tag assignments for `Prune` events, keyed by target
+    /// internal id. Prunes are rank-sensitive and must stay mid-list,
+    /// so they cannot live inside a `tag_ranges` span; this sparse map
+    /// makes them toggleable without moving them.
+    #[serde(default)]
+    pub tagged_prunes: Vec<(u32, String)>,
 }
 
 impl Model {
@@ -165,16 +171,30 @@ impl Model {
             .iter()
             .filter(|r| !enabled.contains(&r.tag))
             .collect();
-        if disabled.is_empty() {
+        let disabled_prunes: std::collections::HashSet<u32> = m
+            .tagged_prunes
+            .iter()
+            .filter(|(_, t)| !enabled.contains(t))
+            .map(|(id, _)| *id)
+            .collect();
+        if disabled.is_empty() && disabled_prunes.is_empty() {
             return m;
         }
         m.events = m
             .events
             .iter()
             .enumerate()
-            .filter(|(i, _)| {
+            .filter(|(i, ev)| {
                 let i = *i as u32;
-                !disabled.iter().any(|r| r.start <= i && i < r.end)
+                if disabled.iter().any(|r| r.start <= i && i < r.end) {
+                    return false;
+                }
+                if let VocabEvent::Prune { target, .. } = ev {
+                    if disabled_prunes.contains(target) {
+                        return false;
+                    }
+                }
+                true
             })
             .map(|(_, ev)| ev.clone())
             .collect();
@@ -184,6 +204,7 @@ impl Model {
     /// All tag names present in the model.
     pub fn tags(&self) -> Vec<String> {
         let mut v: Vec<String> = self.tag_ranges.iter().map(|r| r.tag.clone()).collect();
+        v.extend(self.tagged_prunes.iter().map(|(_, t)| t.clone()));
         v.sort();
         v.dedup();
         v
