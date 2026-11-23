@@ -57,6 +57,8 @@ fn bench_model() -> Model {
             right: 257,
             result: next,
         }],
+        tag_ranges: vec![],
+        tagged_prunes: vec![],
     }
 }
 
