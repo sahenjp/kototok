@@ -529,40 +529,20 @@ fn refine_model(
             })
             .unwrap_or_default();
 
-        let mut gbounds: Vec<usize> = v["byte_spans"]
+        // Violations = predicted pieces covering a noun+particle boundary
+        // (linguistically meaningful over-merge). Using ALL gold boundaries
+        // would also prune harmless compound merges and ASCII superwords,
+        // destroying compression — np boundaries are the surgical target.
+        let mut gbounds: Vec<usize> = v["noun_particles"]
             .as_array()
-            .map(|spans| {
-                spans
-                    .iter()
-                    .flat_map(|s| {
-                        [s[0].as_u64().unwrap_or(0), s[1].as_u64().unwrap_or(0)]
-                    })
-                    .map(|b| b as usize)
-                    .filter(|&b| b > 0 && b < text_len)
+            .map(|nps| {
+                nps.iter()
+                    .filter_map(|n| n["boundary_byte"].as_u64().map(|b| b as usize))
                     .collect()
             })
             .unwrap_or_default();
         gbounds.sort_unstable();
         gbounds.dedup();
-
-        // Boundaries inside okurigana words are protected: pruning those
-        // merges would split the words and break okurigana integrity.
-        let oku_spans: Vec<(usize, usize)> = v["okurigana_words"]
-            .as_array()
-            .map(|ws| {
-                ws.iter()
-                    .filter_map(|w| {
-                        let sp = w["byte_span"].as_array()?;
-                        Some((sp[0].as_u64()? as usize, sp[1].as_u64()? as usize))
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-        gbounds.retain(|b| {
-            !oku_spans
-                .iter()
-                .any(|&(ws, we)| ws < *b && *b < we)
-        });
 
         let Ok(pieces) = tok.encode_with_offsets(text) else {
             continue;
