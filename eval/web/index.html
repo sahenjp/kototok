@@ -17,7 +17,7 @@
   .ibox { flex: 1 1 420px; min-width: 320px; }
   .ibox .lbl { font-size: 13px; color: #9aa4b2; margin-bottom: 5px; font-weight: 600; }
   .ibox textarea {
-    width: 100%; min-height: 72px; resize: vertical;
+    width: 100%; min-height: 46px; resize: vertical;
     background: #1a1d24; color: #f0f2f6;
     border: 1px solid #3a4150; border-radius: 9px;
     padding: 10px 12px; font-size: 15px; line-height: 1.6;
@@ -29,11 +29,12 @@
   }
   .samples button:hover { background: #303848; }
   .summary {
-    overflow-x: auto; margin-bottom: 18px;
+    overflow-x: auto; margin-bottom: 10px;
     background: #1a1d24; border: 1px solid #3a4150; border-radius: 10px;
   }
-  .summary table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  .summary th, .summary td { padding: 6px 12px; text-align: right; white-space: nowrap; }
+  .summary summary { cursor: pointer; padding: 5px 12px; font-size: 11.5px; color: #9aa4b2; font-weight: 600; }
+  .summary table { border-collapse: collapse; width: 100%; font-size: 11.5px; }
+  .summary th, .summary td { padding: 3px 10px; text-align: right; white-space: nowrap; }
   .summary th { color: #9aa4b2; font-weight: 600; border-bottom: 1px solid #3a4150; }
   .summary td:first-child, .summary th:first-child { text-align: left; }
   .summary tr.best td { background: rgba(63,138,74,.18); }
@@ -41,19 +42,28 @@
   .summary tr.best td:first-child::after { content: " ◀ best"; color: #7fd08a; font-size: 11px; }
   .summary td .delta { color: #8b94a3; font-size: 11px; margin-left: 5px; }
   .summary td .delta.bad { color: #e07a5f; }
-  .cols { display: flex; gap: 14px; flex-wrap: wrap; }
+  .cols { display: flex; flex-direction: column; gap: 5px; }
   .col {
-    flex: 1 1 250px; min-width: 245px;
+    display: grid; grid-template-columns: 150px 1fr 1fr 1fr; gap: 5px;
     background: #1a1d24; border: 1px solid #3a4150;
-    border-radius: 10px; padding: 13px;
+    border-radius: 7px; padding: 4px 8px; align-items: stretch;
   }
-  .col h2 { font-size: 14px; margin: 0 0 9px; font-weight: 700; color: #f0f2f6; }
-  .sec .stat { font-size: 12px; margin: 0 0 6px; color: #9aa4b2; }
+  .col:first-child { border-color: #3f8a4a; }
+  .col h2 {
+    font-size: 12px; margin: 0; font-weight: 700; color: #f0f2f6;
+    align-self: center; line-height: 1.3;
+  }
+  .col h2 small { display: block; font-weight: 400; color: #9aa4b2; font-size: 10px; }
+  .sec {
+    background: #14171d; border-radius: 5px; padding: 3px 6px;
+    border: 1px solid #262c38; position: relative;
+  }
+  .sec .stat { display: none; }
   .sec .stat b { color: #d2a8ff; }
-  .pieces { line-height: 2.15; word-break: break-all; margin-bottom: 12px; }
+  .pieces { line-height: 1.6; word-break: break-all; }
   .tok {
-    display: inline-block; padding: 2px 7px; margin: 0 1px;
-    border-radius: 6px; font-size: 15px; font-weight: 500;
+    display: inline-block; padding: 0 4px; margin: 0 1px;
+    border-radius: 4px; font-size: 11px; font-weight: 500;
     border: 1px solid rgba(255,255,255,.14);
   }
   .tok.ws { color: #8b94a3; }
@@ -82,7 +92,7 @@
     <div class="samples" id="mix-samples"></div>
   </div>
 </div>
-<div class="summary" id="summary"></div>
+<details class="summary" id="summary"></details>
 <div class="cols" id="cols"></div>
 
 <script>
@@ -132,9 +142,9 @@ function section(label, m) {
   sec.className = "sec";
   const head = document.createElement("div");
   head.className = "stat";
-  head.innerHTML = `<span class="lbl">${label} · </span>` + (m.error
+  head.innerHTML = `<span class="lbl">${label} </span>` + (m.error
     ? `<b>error:</b> ${m.error}`
-    : `<b>${m.count}</b> tokens · <b>${m.cps}</b> chars/tok`);
+    : `<b>${m.count}</b>tok · ${m.cps}c/t`);
   const pieces = document.createElement("div");
   pieces.className = "pieces";
   (m.pieces || []).forEach((p, i) => {
@@ -160,7 +170,7 @@ function summary(models) {
   for (const k of KEYS) {
     bestPerKey[k] = Math.min(...models.map(m => (m[k] || {}).count || Infinity));
   }
-  let html = "<table><tr><th>model</th>";
+  let html = "<summary>ランキング（トークン数・少ない順）</summary><table><tr><th>model</th>";
   for (const k of KEYS) html += `<th>${LBL[k]}</th>`;
   html += "<th>合計</th><th>vs best</th></tr>";
   const sorted = [...models].sort((a, b) => total(a) - total(b));
@@ -189,12 +199,15 @@ async function refresh() {
   const data = await res.json();
   summary(data.models);
   cols.innerHTML = "";
-  for (const m of data.models) {
+  const tot = m => KEYS.reduce((a,k)=>a+((m[k]||{}).count||0),0);
+  const sorted = [...data.models].sort((a,b)=>tot(a)-tot(b));
+  for (const m of sorted) {
     const div = document.createElement("div");
     div.className = "col";
     const h = document.createElement("h2");
-    h.textContent = m.name;
-    div.append(h, section("日本語", m.ja || {}), section("English", m.en || {}), section("混合", m.mix || {}));
+    const c = k => (m[k]||{}).count ?? "—";
+    h.innerHTML = `${m.name}<small>Σ ${tot(m)} tok</small><small>JA${c("ja")} EN${c("en")} MIX${c("mix")}</small>`;
+    div.append(h, section("JA", m.ja || {}), section("EN", m.en || {}), section("MIX", m.mix || {}));
     cols.appendChild(div);
   }
 }
