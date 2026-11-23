@@ -177,6 +177,26 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
 方法|を|試す                       # 助詞分割 + 動詞保持
 ```
 
+### v2-BKO3 フラッグシップ（学習時多言語混合 + 大規模 graft）
+
+学習コーパスに KO/ZH Wikipedia・口語文を混入した v2 モデル（776MB、vocab 200k）に、Sudachi gold 3 万行相当（JA 15,000・口語 400・KO/ZH 7,136）で Aligned BPE-Knockout を適用した最新フラッグシップ（1,328 prune + 64,498 graft → `kototok_v2_bko3_200k.ktok`、41.6MB）。
+
+同一 held-out 入力での実測（bytes/token、高いほど少トークン）:
+
+| 入力 | v2-BKO3 | 外部最良 | 次点 kototok |
+| --- | ---: | ---: | ---: |
+| JA prose (364KB) | **5.79** | sarashina2 5.24 | s3n-BKO5 5.77 |
+| Korean 未見 wiki (381KB) | **3.75** | llama3 3.58 / o200k 3.58 | s3n-BKO5 3.60 |
+| Chinese 未見 wiki (101KB) | **4.01** | deepseek 3.77 | s3n-BKO5 3.65 |
+| Casual/SNS edge | **3.97** | gemma2 3.72 | s3n-BKO5 3.81 |
+| EN prose | **4.77** | — | s3n-BKO5 4.57 |
+| Code | **5.25** | — | s3n-BKO5 5.05 |
+| Mixed JA/code | **4.93** | — | s3n-BKO5 4.74 |
+
+境界品質（Sudachi gold held-out 500 文）: F1 0.823・送り仮名保持 82.9%・名詞+助詞過結合 1.5%。F1・過結合は歴代最良値だが、送り仮名保持は s3n-BKO5（87.3%）に残差あり — 多言語混合で JA ネイティブ merge が薄まった構造的コストで、送り仮名最重視なら s3n-BKO5 を選ぶ。
+
+ポイント: KO/ZH の学習混入だけでは未見文で 2.88/3.49 B/T に留まり、gold からの大規模 graft（語彙の事後増設）で 3.75/4.01 まで伸びた。BKO が「gold さえあれば任意言語の語彙を後付けできる」汎用修復機構であることの実証。
+
 ### 合成データ評価（参考）
 
 | 指標 | vocab 4k: asym-full / hf-bpe | vocab 32k: asym-full / hf-bpe |
@@ -205,8 +225,12 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
   gold; kototok refined models additionally report held-out scores.
 - Sarashina3's published 2.0 chars/token uses a different, non-public
   test set; comparisons treat it as a target, not a matched benchmark.
-- Casual/SNS text coverage was measured on a synthetic edge set;
-  domain grafts improve it but gemma2 remains stronger there.
+- Casual/SNS text coverage was measured on a small synthetic edge set;
+  v2-BKO3 (3.97 B/T) exceeds gemma2 (3.72) there, but the set is only
+  a few lines and should be treated as directional evidence.
+- v2-BKO3 boundary metrics use a freshly regenerated Sudachi holdout
+  (500 unseen lines, same generation recipe); they are comparable in
+  scale but not line-identical to the earlier s3o-BKO2 holdout table.
 
 ## Matched held-out comparison (Sudachi gold, 500 unseen lines)
 
