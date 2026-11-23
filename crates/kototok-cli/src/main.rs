@@ -200,6 +200,12 @@ enum Command {
         /// enabled/disabled at encode time via `--mode`/`--tags`.
         #[arg(long)]
         tag: Option<String>,
+        /// Also treat okurigana word edges as prune boundaries. Pieces
+        /// crossing a word edge can never be tiled, so they block grafting;
+        /// pruning only these edges repairs okurigana without the compound
+        /// destruction that full-boundary pruning caused.
+        #[arg(long)]
+        prune_oku_edges: bool,
     },
     /// Time `encode` throughput on an input file.
     Bench {
@@ -434,7 +440,16 @@ fn run() -> Result<(), DynError> {
             min_violations,
             min_graft_freq,
             tag,
-        } => refine_model(&model, &gold, &output, min_violations, min_graft_freq, tag),
+            prune_oku_edges,
+        } => refine_model(
+            &model,
+            &gold,
+            &output,
+            min_violations,
+            min_graft_freq,
+            tag,
+            prune_oku_edges,
+        ),
         Command::Bench {
             model,
             input,
@@ -533,6 +548,7 @@ fn refine_model(
     min_violations: usize,
     min_graft_freq: usize,
     tag: Option<String>,
+    prune_oku_edges: bool,
 ) -> Result<(), DynError> {
     let mut model = Model::load_auto(model_path)?;
     let tok = Tokenizer::from_model(model.clone())?;
@@ -605,6 +621,20 @@ fn refine_model(
                     .collect()
             })
             .unwrap_or_default();
+        if prune_oku_edges {
+            if let Some(okus) = v["okurigana_words"].as_array() {
+                for o in okus {
+                    if let Some(sp) = o["byte_span"].as_array() {
+                        if let (Some(a), Some(b)) =
+                            (sp[0].as_u64(), sp[1].as_u64())
+                        {
+                            gbounds.push(a as usize);
+                            gbounds.push(b as usize);
+                        }
+                    }
+                }
+            }
+        }
         gbounds.sort_unstable();
         gbounds.dedup();
 
@@ -660,8 +690,15 @@ fn refine_model(
     }
 
     let mut inserts: Vec<(usize, VocabEvent)> = Vec::new();
-    for (&iid, &(_occ, viol)) in &stats {
+    for (&iid, &(occ, viol)) in &stats {
         if viol < min_violations {
+            continue;
+        }
+        // For oku-edge pruning, only chronic boundary crossers are
+        // pruned: a merge that violates in >=50% of its occurrences is a
+        // bad merge; one that does so rarely is a good merge with an
+        // occasional collision and must stay for compression.
+        if prune_oku_edges && viol * 2 < occ {
             continue;
         }
         let Some(&(rank, left, right)) = internal_to_merge.get(&iid) else {
@@ -702,19 +739,27 @@ fn refine_model(
     let phase2 = model.metadata.phase2_start_rank as usize;
     let before_phase2 = inserts.iter().filter(|(idx, _)| *idx <= phase2).count();
     let n_pruned = inserts.len();
-    for (idx, ev) in inserts {
-        model.events.insert(idx, ev);
-    }
-    // Prune inserts all land inside the learned region, before any graft
-    // layer — shift recorded tag ranges so they keep pointing at their
-    // own events.
-    if n_pruned > 0 {
-        for r in &mut model.tag_ranges {
-            r.start += n_pruned as u32;
-            r.end += n_pruned as u32;
+    // Tagged passes keep the layer self-contained: prunes are appended
+    // inside the tag range so disabling the tag fully removes them.
+    // Untagged passes insert at rank+1 as before (permanent surgery).
+    let mut graft_start = model.events.len() as u32;
+    if tag.is_some() {
+        for (_, ev) in inserts {
+            model.events.push(ev);
         }
+    } else {
+        for (idx, ev) in inserts {
+            model.events.insert(idx, ev);
+        }
+        if n_pruned > 0 {
+            for r in &mut model.tag_ranges {
+                r.start += n_pruned as u32;
+                r.end += n_pruned as u32;
+            }
+        }
+        model.metadata.phase2_start_rank += before_phase2 as u32;
     }
-    model.metadata.phase2_start_rank += before_phase2 as u32;
+    graft_start = model.events.len() as u32 - n_pruned as u32;
     model.metadata.pruned_count += n_pruned;
 
     // Phase B (graft): append merge events producing under-merged gold
@@ -749,7 +794,6 @@ fn refine_model(
     }
     graft_list.sort_by_key(|(f, _)| std::cmp::Reverse(*f));
     let mut n_grafts = 0usize;
-    let graft_start = model.events.len() as u32;
     for (freq, chain) in graft_list {
         if freq < min_graft_freq || chain.len() < 2 {
             continue;

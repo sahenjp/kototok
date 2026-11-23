@@ -194,7 +194,7 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
 | ZH 未見 | **3.97** | 3.49 | 同上 |
 | JA / EN / code / mixed | 5.69 / 4.77 / 5.25 / 4.93 | 5.63 / 4.77 / 5.25 / 4.91 | 差は微小 |
 
-正直な残差: 送り仮名保持 86.0% は s3n-BKO5 の 87.3% に依然届かず（語境界をまたぐ学習 merge が残る構造的理由で、全語境界 prune は圧縮崩壊を招くため不適用）。graft レイヤーは圧縮を損なわない設計で、compress モードでも JA 差は 1% 以内。
+送り仮名のトレードオフは 2 つの出荷モデルで解決する。フラッグシップ `kototok_v2s_200k.ktok` はバランス型（strict: F1 0.830 / oku 86.0% / JA 5.69 B/T）、別配の `kototok_v2s_boundary_200k.ktok` は送り仮名境界を prune 対象に加えた境界最大化型で **F1 0.864 / oku 88.9% / 過結合 0.4%** と s3n-BKO5（87.3%）を超えるが、JA 圧縮が 5.12 B/T まで下がる。prune レイヤーをタグ切替にすると prune のイベント位置依存で graft 連鎖が崩れるため、両プロファイルは別ファイルとして提供する。
 
 ### v2-BKO3 フラッグシップ（学習時多言語混合 + 大規模 graft）
 

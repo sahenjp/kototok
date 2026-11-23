@@ -172,10 +172,9 @@ impl Model {
             .events
             .iter()
             .enumerate()
-            .filter(|(i, ev)| {
+            .filter(|(i, _)| {
                 let i = *i as u32;
-                let in_disabled = disabled.iter().any(|r| r.start <= i && i < r.end);
-                !(in_disabled && matches!(ev, VocabEvent::Merge { .. }))
+                !disabled.iter().any(|r| r.start <= i && i < r.end)
             })
             .map(|(_, ev)| ev.clone())
             .collect();
