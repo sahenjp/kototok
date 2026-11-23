@@ -8,3 +8,4 @@ eval/artifacts*
 *.ktok
 *.profraw
 .DS_Store
+*.tsuzuri/
