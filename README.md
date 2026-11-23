@@ -207,3 +207,32 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
   test set; comparisons treat it as a target, not a matched benchmark.
 - Casual/SNS text coverage was measured on a synthetic edge set;
   domain grafts improve it but gemma2 remains stronger there.
+
+## Matched held-out comparison (Sudachi gold, 500 unseen lines)
+
+| tokenizer | boundary F1 | okurigana integrity | noun+particle overmerge |
+|---|---:|---:|---:|
+| **kototok s3o-BKO2** | **0.802** | **94.1%** | **4.9%** |
+| sarashina2 | 0.783 | 86.2% | 26.6% |
+| gemma2 | 0.767 | 41.8% | 18.8% |
+| plamo | 0.690 | 72.8% | 27.4% |
+| llm-jp / llama3 / qwen2.5 / deepseek | 0.21-0.22 | ~71% | 70-74% |
+| mistral | 0.092 | 0.6% | 95.4% |
+
+## Downstream proxy: trigram-LM cross-entropy (bits/byte, jawiki held-out)
+
+Lower is better; normalized per byte, so compression and predictability
+are jointly measured. kototok ties the JA-native leaders and beats all
+general multilingual tokenizers.
+
+| tokenizer | bits/byte |
+|---|---:|
+| plamo | 2.309 |
+| mistral | 2.229 (148k tokens, 2.2x more) |
+| sarashina2 | 2.338 |
+| **kototok s3o-BKO3** | **2.356** |
+| deepseek | 2.433 |
+| llama3 | 2.452 |
+| qwen2.5 | 2.461 |
+| gemma2 | 2.513 |
+| llm-jp | 2.257 |
