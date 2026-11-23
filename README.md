@@ -12,6 +12,19 @@
 3. **UTF-8 原子性 + PickyBPE の二段階学習** — 学習語彙の不正 UTF-8 混入率 0%、中間トークンの死蔵を抑制。
 4. **DFA ベースの完全可逆エンコード** — 正規表現バックトラックを使わず最悪 O(N)。敵対的 1 MiB 入力でも遅延しない。
 
+## 関連研究との差分（新規性の所在）
+
+正直に位置づける。個別要素には先行研究があり、本実装の新規点は「タグ単位で着脱可能な外科レイヤー」とその組合せにある。
+
+| 先行・関連技術 | 関係 |
+| --- | --- |
+| BPE-Knockout（Bauwens & Delobelle 2024） | prune（学習済み merge の事後切除）は同系。差分: 本実装は merge 削除だけでなく graft（観測分割連鎖を merge イベントとして末尾追加）で修復し、かつ層タグで着脱可能にした拡張（Aligned BPE-Knockout）。 |
+| 語彙拡張 / tokenizer transfer（FVT、継続事前学習の語彙置換系） | graft は「既存語彙の後に低優先 merge を追加」する点で同族。差分: graft 源が gold 境界の観測分割連鎖であり、単語あたり最大 8 パターンの文脈依存連鎖（multi-chain graft）を保持する点。 |
+| BPE-dropout（Provilkov et al. 2020）・SentencePiece n-best sampling | 「複数分割の共存」は共通テーマ。差分: 本方式は学習/エンコード時の確率的摂動ではなく、モデルファイルが決定論的な代替 merge 層を内蔵しロード時に層選択する静的機構。 |
+| Sudachi / UniDic 等の辞書分割 | gold の出典として利用（修復・評価両方）。モデル自体は辞書非依存で、gold が無い言語では同じ手術は行えない制限あり。 |
+
+評価の注意: 境界指標は Sudachi 分割を正解とする自己言及的評価であり、「Sudachi への一致率」以上の意味を持たない。別系統辞書（UniDic）での裏取りは末尾の「Independent-gold cross-check」節を参照 — 順位は保存される。
+
 ## ワークスペース
 
 | クレート | 役割 |
@@ -257,6 +270,14 @@ strict は s3n-BKO5 の 87.3% を超える歴代最高の送り仮名保持と�
 - v2-BKO3 boundary metrics use a freshly regenerated Sudachi holdout
   (500 unseen lines, same generation recipe); they are comparable in
   scale but not line-identical to the earlier s3o-BKO2 holdout table.
+- Leakage audit (2026-11): every gold file recorded as applied to the
+  flagship layers (ja/casual/kozh/okuri/okuedge) shares **zero** lines
+  with the 500-line holdout (exact and 60-char-prefix match). One
+  generation intermediate (`gold_ja_v2`, the pre-split 3000-line
+  superset) contains the holdout lines; it is not recorded as a refine
+  input, but as a residual risk we also verified a rebuild lineage
+  that provably never touched it reaches equivalent scores
+  (balanced F1 0.865 / oku 86.0%).
 
 ## Matched held-out comparison (Sudachi gold, 500 unseen lines)
 
@@ -268,6 +289,32 @@ strict は s3n-BKO5 の 87.3% を超える歴代最高の送り仮名保持と�
 | plamo | 0.690 | 72.8% | 27.4% |
 | llm-jp / llama3 / qwen2.5 / deepseek | 0.21-0.22 | ~71% | 70-74% |
 | mistral | 0.092 | 0.6% | 95.4% |
+
+## Independent-gold cross-check (UniDic, same 500 lines)
+
+The same 500 held-out sentences re-segmented with UniDic (fugashi /
+unidic-lite, MeCab short-unit annotation) — a different dictionary
+family from Sudachi, so agreement is not an artifact of Sudachi's
+segmentation scheme. Gold produced by `eval/gold_unidic.py` from the
+same input texts; metrics computed by `eval/boundary_holdout.py`.
+
+| tokenizer | boundary F1 | okurigana integrity | noun+particle overmerge |
+|---|---:|---:|---:|
+| **kototok v2-T strict** | **0.852** | **89.0%** | **0.5%** |
+| kototok v2-T balanced | 0.850 | 86.0% | 1.5% |
+| kototok s3o-BKO2 | 0.799 | 92.0% | 3.9% |
+| gemma2 | 0.783 | 40.6% | 17.4% |
+| sarashina2 | 0.770 | 83.5% | 26.0% |
+| o200k | 0.762 | 2.2% | 0.3% |
+| cl100k | 0.674 | 0.0% | 0.2% |
+| plamo | 0.667 | 72.0% | 29.2% |
+| llm-jp / llama3 / qwen2.5 / deepseek | 0.21-0.23 | ~72% | 69-73% |
+| mistral | 0.088 | 0.4% | 94.8% |
+
+The ranking is preserved on the independent gold: kototok's surgical
+layers hold the top boundary F1, and the okurigana/over-merge profile is
+stable across dictionary schemes (v2-T strict: Sudachi 88.9% / 0.4% →
+UniDic 89.0% / 0.5%).
 
 ## Downstream proxy: trigram-LM cross-entropy (bits/byte, jawiki held-out)
 
