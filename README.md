@@ -318,18 +318,32 @@ UniDic 89.0% / 0.5%).
 
 ## Downstream proxy: trigram-LM cross-entropy (bits/byte, jawiki held-out)
 
-Lower is better; normalized per byte, so compression and predictability
-are jointly measured. kototok ties the JA-native leaders and beats all
-general multilingual tokenizers.
+A trigram LM (single-discount absolute backoff with KN continuation
+counts, `eval/downstream_trigram.py`) is trained per tokenizer on the
+same 64MiB jawiki slice, then scores a 363KiB held-out jawiki text.
+Lower is better; per-byte normalization measures compression and
+predictability jointly.
 
-| tokenizer | bits/byte |
-|---|---:|
-| plamo | 2.309 |
-| mistral | 2.229 (148k tokens, 2.2x more) |
-| sarashina2 | 2.338 |
-| **kototok s3o-BKO3** | **2.356** |
-| deepseek | 2.433 |
-| llama3 | 2.452 |
-| qwen2.5 | 2.461 |
-| gemma2 | 2.513 |
-| llm-jp | 2.257 |
+kototok takes 5 of the top 7 slots and beats every general multilingual
+tokenizer; only sarashina2 (JA-native, trained on a much larger Japanese
+corpus) stays ahead, by 0.004 bits/byte. The strict boundary policy
+costs ~0.02 bits/byte vs the surgical variants — the price of splitting
+particles the LM could otherwise fuse.
+
+| tokenizer | bits/byte | eval tokens |
+|---|---:|---:|
+| sarashina2 | 1.433 | 69,587 |
+| **kototok s3o-BKO3 / s3o-BKO2** | **1.437** | 64,885 |
+| **kototok v2-BKO3** | **1.441** | 62,930 |
+| **kototok s3n-BKO5** | **1.443** | 63,060 |
+| plamo | 1.447 | 73,397 |
+| **kototok v2-T balanced** | **1.448** | 67,577 |
+| **kototok v2-T strict** | **1.464** | 71,334 |
+| gemma2 | 1.485 | 82,440 |
+| llm-jp | 1.498 | 89,950 |
+| deepseek | 1.534 | 94,105 |
+| llama3 | 1.557 | 99,734 |
+| qwen2.5 | 1.560 | 100,819 |
+| o200k | 1.590 | 108,183 |
+| mistral | 1.730 | 147,947 (2.3x kototok) |
+| cl100k | 1.763 | 149,199 |
