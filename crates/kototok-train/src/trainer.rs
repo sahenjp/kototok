@@ -227,6 +227,7 @@ impl Trainer {
             special_tokens: self.special_pairs(),
             internal_tokens: toks,
             events: self.events.clone(),
+            tag_ranges: Vec::new(),
         };
         let tok = Tokenizer::from_model(model)?;
         let enc: Vec<Vec<u32>> = counts
@@ -923,6 +924,7 @@ impl Trainer {
             special_tokens: self.special_pairs(),
             internal_tokens: self.tokens,
             events: self.events,
+            tag_ranges: Vec::new(),
         };
         let audit = model.audit_utf8_validity();
         model.metadata.vocab_size = audit.alive_vocab_size;

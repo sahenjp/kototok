@@ -10,7 +10,35 @@ use std::time::Instant;
 use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
-use kototok_core::{InternalToken, KototokError, Model, TokenKind, Tokenizer, VocabEvent};
+use kototok_core::{
+    InternalToken, KototokError, Model, TagRange, TokenKind, Tokenizer, VocabEvent,
+};
+
+/// Selectable-segmentation policy: which provenance-tagged graft layers
+/// are active. `strict` (default) keeps every layer; `compress` drops all
+/// tagged grafts; `--tags a,b` enables exactly the listed tags.
+#[derive(clap::Args, Clone, Default, Debug)]
+struct PolicyArgs {
+    #[arg(long, value_parser = ["strict", "compress"])]
+    mode: Option<String>,
+    /// Comma-separated graft tags to enable.
+    #[arg(long)]
+    tags: Option<String>,
+}
+
+impl PolicyArgs {
+    fn apply(&self, model: Model) -> Model {
+        if self.mode.as_deref() == Some("compress") {
+            return model.filtered_by_tags(&std::collections::HashSet::new());
+        }
+        if let Some(t) = &self.tags {
+            let set: std::collections::HashSet<String> =
+                t.split(',').map(|s| s.trim().to_string()).collect();
+            return model.filtered_by_tags(&set);
+        }
+        model
+    }
+}
 use kototok_train::{TrainPreset, train};
 
 #[derive(Parser)]
@@ -113,6 +141,8 @@ enum Command {
         /// Emit the eval JSON schema.
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        policy: PolicyArgs,
     },
     /// Decode comma-separated final token ids.
     Decode {
@@ -121,6 +151,8 @@ enum Command {
         /// e.g. `--ids 104,105,256`.
         #[arg(long)]
         ids: String,
+        #[command(flatten)]
+        policy: PolicyArgs,
     },
     /// Dump the raw model as JSON (for exporters).
     Dump {
@@ -142,6 +174,8 @@ enum Command {
         model: PathBuf,
         #[arg(long)]
         text: String,
+        #[command(flatten)]
+        policy: PolicyArgs,
     },
     /// Boundary-aligned merge surgery: prune learned merges that cross gold
     /// morphological boundaries (Aligned BPE-Knockout).
@@ -162,6 +196,10 @@ enum Command {
         /// new merge events that produce it (`0` disables grafting).
         #[arg(long, default_value_t = 1)]
         min_graft_freq: usize,
+        /// Provenance tag for this graft layer. Tagged layers can be
+        /// enabled/disabled at encode time via `--mode`/`--tags`.
+        #[arg(long)]
+        tag: Option<String>,
     },
     /// Time `encode` throughput on an input file.
     Bench {
@@ -177,6 +215,8 @@ enum Command {
         iters: usize,
         #[arg(long)]
         json: bool,
+        #[command(flatten)]
+        policy: PolicyArgs,
     },
 }
 
@@ -307,8 +347,9 @@ fn run() -> Result<(), DynError> {
             ids,
             pieces,
             json,
+            policy,
         } => {
-            let tok = load_tokenizer(&model)?;
+            let tok = load_tokenizer_policy(&model, &policy)?;
             let text = read_text(input.as_deref(), text)?;
             if json {
                 let spans = tok.encode_with_offsets(&text)?;
@@ -338,8 +379,8 @@ fn run() -> Result<(), DynError> {
             }
             Ok(())
         }
-        Command::Decode { model, ids } => {
-            let tok = load_tokenizer(&model)?;
+        Command::Decode { model, ids, policy } => {
+            let tok = load_tokenizer_policy(&model, &policy)?;
             let ids: Vec<u32> = ids
                 .split(',')
                 .filter(|s| !s.trim().is_empty())
@@ -365,8 +406,12 @@ fn run() -> Result<(), DynError> {
             }
             Ok(())
         }
-        Command::Viz { model, text } => {
-            let tok = load_tokenizer(&model)?;
+        Command::Viz {
+            model,
+            text,
+            policy,
+        } => {
+            let tok = load_tokenizer_policy(&model, &policy)?;
             let pieces = tok.tokenize_pieces(&text)?;
             let chars = text.chars().count();
             println!("{}", pieces.join("|"));
@@ -388,13 +433,15 @@ fn run() -> Result<(), DynError> {
             output,
             min_violations,
             min_graft_freq,
-        } => refine_model(&model, &gold, &output, min_violations, min_graft_freq),
+            tag,
+        } => refine_model(&model, &gold, &output, min_violations, min_graft_freq, tag),
         Command::Bench {
             model,
             input,
             threads,
             iters,
             json,
+            policy,
         } => {
             if threads > 1 {
                 rayon::ThreadPoolBuilder::new()
@@ -402,7 +449,7 @@ fn run() -> Result<(), DynError> {
                     .build_global()
                     .ok();
             }
-            let tok = load_tokenizer(&model)?;
+            let tok = load_tokenizer_policy(&model, &policy)?;
             let text = fs::read_to_string(&input)?;
 
             // Warmup (also produces the reference token count).
@@ -454,8 +501,8 @@ fn run() -> Result<(), DynError> {
     }
 }
 
-fn load_tokenizer(path: &Path) -> Result<Tokenizer, KototokError> {
-    Tokenizer::from_model(Model::load_auto(path)?)
+fn load_tokenizer_policy(path: &Path, policy: &PolicyArgs) -> Result<Tokenizer, KototokError> {
+    Tokenizer::from_model(policy.apply(Model::load_auto(path)?))
 }
 
 fn read_text(input: Option<&Path>, text: Option<String>) -> io::Result<String> {
@@ -485,6 +532,7 @@ fn refine_model(
     out_path: &Path,
     min_violations: usize,
     min_graft_freq: usize,
+    tag: Option<String>,
 ) -> Result<(), DynError> {
     let mut model = Model::load_auto(model_path)?;
     let tok = Tokenizer::from_model(model.clone())?;
@@ -511,9 +559,15 @@ fn refine_model(
     // internal_id -> (occurrences, violations)
     let mut stats: std::collections::HashMap<u32, (usize, usize)> =
         std::collections::HashMap::new();
-    // token bytes -> (frequency, internal-id chain producing it)
-    let mut graft_map: std::collections::HashMap<Vec<u8>, (usize, Vec<u32>)> =
-        std::collections::HashMap::new();
+    // token bytes -> distinct observed split chains -> frequency.
+    // A word can split differently by context; keeping only one chain
+    // leaves other patterns unrepaired, so up to MAX_CHAINS patterns
+    // are grafted per word (multi-chain graft).
+    let mut graft_map: std::collections::HashMap<
+        Vec<u8>,
+        std::collections::HashMap<Vec<u32>, usize>,
+    > = std::collections::HashMap::new();
+    const MAX_CHAINS: usize = 8;
     let mut n_lines = 0usize;
     for line in fs::read_to_string(gold_path)?
         .lines()
@@ -527,16 +581,14 @@ fn refine_model(
             continue;
         }
         n_lines += 1;
-        let text_len = text.len();
+        let _text_len = text.len();
 
         let gold_tokens: Vec<(usize, usize)> = v["byte_spans"]
             .as_array()
             .map(|spans| {
                 spans
                     .iter()
-                    .filter_map(|s| {
-                        Some((s[0].as_u64()? as usize, s[1].as_u64()? as usize))
-                    })
+                    .filter_map(|s| Some((s[0].as_u64()? as usize, s[1].as_u64()? as usize)))
                     .collect()
             })
             .unwrap_or_default();
@@ -600,8 +652,8 @@ fn refine_model(
                 }
                 if tiled && expect == ge && inside.len() >= 2 {
                     let key = text.as_bytes()[gs..ge].to_vec();
-                    let ent = graft_map.entry(key).or_insert((0, inside));
-                    ent.0 += 1;
+                    let ent = graft_map.entry(key).or_default();
+                    *ent.entry(inside).or_insert(0) += 1;
                 }
             }
         }
@@ -653,6 +705,15 @@ fn refine_model(
     for (idx, ev) in inserts {
         model.events.insert(idx, ev);
     }
+    // Prune inserts all land inside the learned region, before any graft
+    // layer — shift recorded tag ranges so they keep pointing at their
+    // own events.
+    if n_pruned > 0 {
+        for r in &mut model.tag_ranges {
+            r.start += n_pruned as u32;
+            r.end += n_pruned as u32;
+        }
+    }
     model.metadata.phase2_start_rank += before_phase2 as u32;
     model.metadata.pruned_count += n_pruned;
 
@@ -678,10 +739,18 @@ fn refine_model(
         .filter_map(|t| t.final_id)
         .max()
         .map_or(0, |m| m + 1);
-    let mut graft_list: Vec<_> = graft_map.into_iter().collect();
-    graft_list.sort_by_key(|(_, (f, _))| std::cmp::Reverse(*f));
+    // Flatten word -> [(freq, chain)] sorted by frequency, capped at
+    // MAX_CHAINS distinct split patterns per word.
+    let mut graft_list: Vec<(usize, Vec<u32>)> = Vec::new();
+    for (_bytes, chains) in graft_map {
+        let mut cs: Vec<(usize, Vec<u32>)> = chains.into_iter().map(|(c, f)| (f, c)).collect();
+        cs.sort_by_key(|(f, _)| std::cmp::Reverse(*f));
+        graft_list.extend(cs.into_iter().take(MAX_CHAINS));
+    }
+    graft_list.sort_by_key(|(f, _)| std::cmp::Reverse(*f));
     let mut n_grafts = 0usize;
-    for (_bytes, (freq, chain)) in graft_list {
+    let graft_start = model.events.len() as u32;
+    for (freq, chain) in graft_list {
         if freq < min_graft_freq || chain.len() < 2 {
             continue;
         }
@@ -719,12 +788,21 @@ fn refine_model(
             n_grafts += 1;
         }
     }
+    if let Some(tag) = &tag {
+        let end = model.events.len() as u32;
+        if end > graft_start {
+            model.tag_ranges.push(TagRange {
+                start: graft_start,
+                end,
+                tag: tag.clone(),
+            });
+        }
+    }
     model.metadata.vocab_size = next_fid as usize;
 
     model.metadata.name = format!("{}-refined", model.metadata.name);
-    model.metadata.train_notes = format!(
-        "aligned-BKO: {n_pruned} prunes + {n_grafts} grafts via {n_lines} gold sentences"
-    );
+    model.metadata.train_notes =
+        format!("aligned-BKO: {n_pruned} prunes + {n_grafts} grafts via {n_lines} gold sentences");
     model.save_binary(out_path)?;
     println!(
         "refined: {n_pruned} prunes + {n_grafts} grafts ({n_lines} gold lines) -> {}",

@@ -596,6 +596,7 @@ mod tests {
             special_tokens: vec![],
             internal_tokens: internal,
             events,
+            tag_ranges: Vec::new(),
         }
     }
 

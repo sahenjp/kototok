@@ -24,8 +24,13 @@ struct PyTokenizer {
 impl PyTokenizer {
     /// Load a `.ktok` (binary) or `.json` model file.
     #[staticmethod]
-    fn load(path: &str) -> PyResult<Self> {
-        let model = Model::load_auto(path).map_err(to_value_err)?;
+    #[pyo3(signature = (path, tags = None))]
+    fn load(path: &str, tags: Option<Vec<String>>) -> PyResult<Self> {
+        let mut model = Model::load_auto(path).map_err(to_value_err)?;
+        if let Some(tags) = tags {
+            let set: std::collections::HashSet<String> = tags.into_iter().collect();
+            model = model.filtered_by_tags(&set);
+        }
         let inner = CoreTokenizer::from_model(model).map_err(to_value_err)?;
         Ok(Self { inner })
     }

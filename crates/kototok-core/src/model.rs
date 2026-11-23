@@ -128,6 +128,17 @@ pub struct Utf8AuditReport {
     pub script_breakdown: ScriptBreakdown,
 }
 
+/// A contiguous range of `events` carrying a provenance tag. Grafted
+/// merge layers (e.g. `okuri`, `kozh`, `casual`) record their event span
+/// so a load-time policy can enable/disable whole layers — one `.ktok`
+/// file serves multiple deterministic segmentation policies.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct TagRange {
+    pub start: u32,
+    pub end: u32,
+    pub tag: String,
+}
+
 /// Complete serialized representation of a trained `kototok` tokenizer.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Model {
@@ -136,6 +147,48 @@ pub struct Model {
     pub special_tokens: Vec<(String, u32)>,
     pub internal_tokens: Vec<InternalToken>,
     pub events: Vec<VocabEvent>,
+    /// Provenance-tagged event ranges (appended graft layers). Empty for
+    /// models produced before tagging existed.
+    #[serde(default)]
+    pub tag_ranges: Vec<TagRange>,
+}
+
+impl Model {
+    /// Merge events inside a `tag_ranges` span whose tag is disabled are
+    /// dropped; the produced tokens simply become unreachable (graceful
+    /// degradation to smaller pieces). `Prune` events always stay — they
+    /// carry boundary corrections independent of merge layers.
+    pub fn filtered_by_tags(&self, enabled: &std::collections::HashSet<String>) -> Model {
+        let mut m = self.clone();
+        let disabled: Vec<&TagRange> = m
+            .tag_ranges
+            .iter()
+            .filter(|r| !enabled.contains(&r.tag))
+            .collect();
+        if disabled.is_empty() {
+            return m;
+        }
+        m.events = m
+            .events
+            .iter()
+            .enumerate()
+            .filter(|(i, ev)| {
+                let i = *i as u32;
+                let in_disabled = disabled.iter().any(|r| r.start <= i && i < r.end);
+                !(in_disabled && matches!(ev, VocabEvent::Merge { .. }))
+            })
+            .map(|(_, ev)| ev.clone())
+            .collect();
+        m
+    }
+
+    /// All tag names present in the model.
+    pub fn tags(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.tag_ranges.iter().map(|r| r.tag.clone()).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
 }
 
 /// Errors returned by `kototok-core` encoding, decoding, and serialization APIs.

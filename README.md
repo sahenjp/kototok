@@ -177,6 +177,25 @@ kototok train --input eval/artifacts_real/data/train_corpus_s3f.txt \
 方法|を|試す                       # 助詞分割 + 動詞保持
 ```
 
+### Selectable-Segmentation Tokenizer（v2-T、ポリシー切替型）
+
+`.ktok` の語彙イベント列に**出自タグ付き graft レイヤー**を内蔵し、ロード時のポリシーで分割規則を切り替える機構（`kototok_v2s_200k.ktok`）。1 ファイルで「言語学的忠実モード」と「学習 merge のみの素の圧縮モード」を切替可能 — BPE-dropout（確率的・学習時）や SentencePiece サンプリングとは異なり、モデル自体が決定論的な複数分割規則を保持する。
+
+- `refine --tag ja|casual|kozh|okuri` で各 graft バッチに provenance を記録（`tag_ranges`、serde 互換で新旧モデル相互ロード可）。
+- `encode --mode strict`（既定・全レイヤー有効）/`--mode compress`（全 graft 無効）/`--tags kozh,okuri`（任意選択）。Python は `Tokenizer.load(path, tags=[...])`。
+- **multi-chain graft**: 1 語に対し観測された複数の split パターン（文脈依存の分割揺れ）を最大 8 チェーンまで graft。従来は 1 チェーンのみ保持で文脈パターンを修復できなかった。
+
+実測（同モデルの両モード、held-out）:
+
+| | strict | compress | 備考 |
+|---|---:|---:|---|
+| 境界 F1 / okurigana / 過結合 | **0.830 / 86.0% / 1.3%** | 0.821 / 74.6% / 1.1% | strict が歴代最良 F1・最少過結合 |
+| KO 未見 | **3.75** | 2.88 | `kozh` レイヤーのみで +30% |
+| ZH 未見 | **3.97** | 3.49 | 同上 |
+| JA / EN / code / mixed | 5.69 / 4.77 / 5.25 / 4.93 | 5.63 / 4.77 / 5.25 / 4.91 | 差は微小 |
+
+正直な残差: 送り仮名保持 86.0% は s3n-BKO5 の 87.3% に依然届かず（語境界をまたぐ学習 merge が残る構造的理由で、全語境界 prune は圧縮崩壊を招くため不適用）。graft レイヤーは圧縮を損なわない設計で、compress モードでも JA 差は 1% 以内。
+
 ### v2-BKO3 フラッグシップ（学習時多言語混合 + 大規模 graft）
 
 学習コーパスに KO/ZH Wikipedia・口語文を混入した v2 モデル（776MB、vocab 200k）に、Sudachi gold 3 万行相当（JA 15,000・口語 400・KO/ZH 7,136）で Aligned BPE-Knockout を適用した最新フラッグシップ（1,328 prune + 64,498 graft → `kototok_v2_bko3_200k.ktok`、41.6MB）。

@@ -128,6 +128,7 @@ mod tests {
                 right: 98,
                 result: 256,
             }],
+            tag_ranges: Vec::new(),
         }
     }
 
