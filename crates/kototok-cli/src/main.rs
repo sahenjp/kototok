@@ -122,6 +122,13 @@ enum Command {
         #[arg(long)]
         ids: String,
     },
+    /// Dump the raw model as JSON (for exporters).
+    Dump {
+        #[arg(long)]
+        model: PathBuf,
+        #[arg(long)]
+        output: PathBuf,
+    },
     /// Print the model's UTF-8 audit report.
     Inspect {
         #[arg(long)]
@@ -339,6 +346,11 @@ fn run() -> Result<(), DynError> {
                 .map(|s| s.trim().parse::<u32>())
                 .collect::<Result<_, _>>()?;
             println!("{}", tok.decode(&ids)?);
+            Ok(())
+        }
+        Command::Dump { model, output } => {
+            Model::load_auto(&model)?.save_json(&output)?;
+            println!("dumped -> {}", output.display());
             Ok(())
         }
         Command::Inspect { model, json } => {
