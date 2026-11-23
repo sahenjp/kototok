@@ -189,10 +189,10 @@ impl Model {
                 if disabled.iter().any(|r| r.start <= i && i < r.end) {
                     return false;
                 }
-                if let VocabEvent::Prune { target, .. } = ev {
-                    if disabled_prunes.contains(target) {
-                        return false;
-                    }
+                if let VocabEvent::Prune { target, .. } = ev
+                    && disabled_prunes.contains(target)
+                {
+                    return false;
                 }
                 true
             })
