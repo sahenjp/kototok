@@ -42,6 +42,12 @@ pub struct PreTokenizerConfig {
     pub max_digit_run: usize,
     pub max_chunk_chars: usize,
     pub max_segment_chunks: usize,
+    /// Enable multilingual script-aware runs and combining-mark continuation.
+    #[serde(default)]
+    pub multilingual_scripts: bool,
+    /// Attach a single leading ASCII space to hard punctuation chunks.
+    #[serde(default)]
+    pub attach_space_to_punct: bool,
 }
 
 impl Default for PreTokenizerConfig {
@@ -53,6 +59,8 @@ impl Default for PreTokenizerConfig {
             max_digit_run: 3,
             max_chunk_chars: 128,
             max_segment_chunks: 64,
+            multilingual_scripts: false,
+            attach_space_to_punct: false,
         }
     }
 }
@@ -162,8 +170,9 @@ pub struct Model {
 impl Model {
     /// Merge events inside a `tag_ranges` span whose tag is disabled are
     /// dropped; the produced tokens simply become unreachable (graceful
-    /// degradation to smaller pieces). `Prune` events always stay — they
-    /// carry boundary corrections independent of merge layers.
+    /// degradation to smaller pieces). Tagged prunes are dropped when their
+    /// provenance tag is disabled. Event indices, `phase2_start_rank`, and
+    /// surviving tag ranges are compacted to match the filtered event list.
     pub fn filtered_by_tags(&self, enabled: &std::collections::HashSet<String>) -> Model {
         let mut m = self.clone();
         let disabled: Vec<&TagRange> = m
@@ -180,24 +189,41 @@ impl Model {
         if disabled.is_empty() && disabled_prunes.is_empty() {
             return m;
         }
-        m.events = m
-            .events
+        let old_len = m.events.len();
+        let mut kept_before = Vec::with_capacity(old_len + 1);
+        kept_before.push(0u32);
+        let mut new_events = Vec::with_capacity(old_len);
+        for (i, ev) in m.events.iter().enumerate() {
+            let i = i as u32;
+            let in_disabled_range = disabled.iter().any(|r| r.start <= i && i < r.end);
+            let disabled_prune =
+                matches!(ev, VocabEvent::Prune { target, .. } if disabled_prunes.contains(target));
+            if !in_disabled_range && !disabled_prune {
+                new_events.push(ev.clone());
+            }
+            kept_before.push(new_events.len() as u32);
+        }
+
+        let old_phase2 = m.metadata.phase2_start_rank;
+        let phase2_pos = usize::min(old_phase2 as usize, old_len);
+        let removed_before_phase2 = (phase2_pos as u32).saturating_sub(kept_before[phase2_pos]);
+        m.metadata.phase2_start_rank = old_phase2.saturating_sub(removed_before_phase2);
+        m.events = new_events;
+        m.tag_ranges = m
+            .tag_ranges
             .iter()
-            .enumerate()
-            .filter(|(i, ev)| {
-                let i = *i as u32;
-                if disabled.iter().any(|r| r.start <= i && i < r.end) {
-                    return false;
+            .filter(|r| enabled.contains(&r.tag))
+            .map(|r| {
+                let start = usize::min(r.start as usize, old_len);
+                let end = usize::min(r.end as usize, old_len);
+                TagRange {
+                    start: kept_before[start],
+                    end: kept_before[end],
+                    tag: r.tag.clone(),
                 }
-                if let VocabEvent::Prune { target, .. } = ev
-                    && disabled_prunes.contains(target)
-                {
-                    return false;
-                }
-                true
             })
-            .map(|(_, ev)| ev.clone())
             .collect();
+        m.tagged_prunes.retain(|(_, tag)| enabled.contains(tag));
         m
     }
 
@@ -228,7 +254,30 @@ pub enum KototokError {
     PrunedTokenEmitted(u32),
 }
 
+pub(crate) const MAX_SPARSE_ID_GAP: u64 = 1_048_576;
+
 impl Model {
+    /// Validates that sparse `final_id`s cannot force an enormous decode table.
+    pub(crate) fn validate_final_id_sparsity(&self) -> Result<(), KototokError> {
+        let alive_count = self
+            .internal_tokens
+            .iter()
+            .filter(|tok| tok.final_id.is_some())
+            .count() as u64;
+        if let Some(max_final_id) = self
+            .internal_tokens
+            .iter()
+            .filter_map(|tok| tok.final_id)
+            .max()
+            && u64::from(max_final_id) + 1 > alive_count + MAX_SPARSE_ID_GAP
+        {
+            return Err(KototokError::InvalidFormat(
+                "model token IDs are too sparse for the decode table".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Returns the number of active tokens in the final vocabulary.
     pub fn vocab_size(&self) -> usize {
         let count = self
@@ -392,5 +441,81 @@ fn classify_token_script(text: &str, breakdown: &mut ScriptBreakdown) {
         (false, false, true, false) => breakdown.katakana += 1,
         (true, true, false, false) => breakdown.kanji_hiragana += 1,
         _ => breakdown.mixed_utf8 += 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event(i: u32) -> VocabEvent {
+        VocabEvent::Merge {
+            left: i,
+            right: i,
+            result: i,
+        }
+    }
+
+    #[test]
+    fn filtered_by_tags_compacts_phase2_rank_ranges_and_prunes() {
+        let mut model = Model {
+            metadata: ModelMetadata {
+                name: "tags".into(),
+                version: 1,
+                vocab_size: 0,
+                phase1_vocab_size: 0,
+                phase2_start_rank: 3,
+                pruned_count: 0,
+                invalid_utf8_learned_tokens: 0,
+                train_notes: String::new(),
+            },
+            pretok: PreTokenizerConfig::default(),
+            special_tokens: vec![],
+            internal_tokens: vec![],
+            events: vec![
+                event(0),
+                VocabEvent::Prune {
+                    target: 77,
+                    split_into: vec![1, 2],
+                },
+                event(2),
+                event(3),
+                event(4),
+                event(5),
+            ],
+            tag_ranges: vec![
+                TagRange {
+                    start: 3,
+                    end: 5,
+                    tag: "drop".into(),
+                },
+                TagRange {
+                    start: 5,
+                    end: 6,
+                    tag: "keep".into(),
+                },
+            ],
+            tagged_prunes: vec![(77, "drop-prune".into()), (88, "keep-prune".into())],
+        };
+        model.events[1] = VocabEvent::Prune {
+            target: 77,
+            split_into: vec![1, 2],
+        };
+
+        let filtered = model.filtered_by_tags(&std::collections::HashSet::from([
+            "keep".to_string(),
+            "keep-prune".to_string(),
+        ]));
+        assert_eq!(filtered.events, vec![event(0), event(2), event(5),]);
+        assert_eq!(filtered.metadata.phase2_start_rank, 2);
+        assert_eq!(
+            filtered.tag_ranges,
+            vec![TagRange {
+                start: 2,
+                end: 3,
+                tag: "keep".into(),
+            }]
+        );
+        assert_eq!(filtered.tagged_prunes, vec![(88, "keep-prune".into())]);
     }
 }

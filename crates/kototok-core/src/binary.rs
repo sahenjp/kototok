@@ -63,6 +63,7 @@ impl Model {
             return Err(invalid("trailing bytes after KTOK payload"));
         }
         let model: Model = serde_json::from_slice(&rest[..payload_len])?;
+        model.validate_final_id_sparsity()?;
         Ok(model)
     }
 
@@ -77,18 +78,13 @@ impl Model {
     pub fn load_json(path: impl AsRef<Path>) -> Result<Self, KototokError> {
         let bytes = std::fs::read(path)?;
         let model: Model = serde_json::from_slice(&bytes)?;
+        model.validate_final_id_sparsity()?;
         Ok(model)
     }
 
-    /// Loads a model, detecting `KTOK` binary vs JSON by magic bytes.
+    /// Loads a model, detecting its native or interoperable format.
     pub fn load_auto(path: impl AsRef<Path>) -> Result<Self, KototokError> {
-        let bytes = std::fs::read(path)?;
-        if bytes.starts_with(&KTOK_MAGIC) {
-            Self::from_binary_bytes(&bytes)
-        } else {
-            let model: Model = serde_json::from_slice(&bytes)?;
-            Ok(model)
-        }
+        crate::formats::load_auto(path.as_ref())
     }
 }
 
@@ -153,6 +149,26 @@ mod tests {
         let loaded = Model::load_auto(&path).unwrap();
         assert_eq!(model, loaded);
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn sparse_final_id_rejected_without_allocation() {
+        let mut model = toy_model();
+        model.internal_tokens[0].final_id = Some(u32::MAX - 1);
+        assert!(matches!(
+            model.validate_final_id_sparsity(),
+            Err(KototokError::InvalidFormat(_))
+        ));
+        let payload = serde_json::to_vec(&model).unwrap();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&KTOK_MAGIC);
+        bytes.extend_from_slice(&KTOK_FORMAT_VERSION.to_le_bytes());
+        bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        assert!(matches!(
+            Model::from_binary_bytes(&bytes),
+            Err(KototokError::InvalidFormat(_))
+        ));
     }
 
     #[test]

@@ -55,7 +55,8 @@ pub fn init_tokens(
             .map(|(&ch, &n)| (n, ch))
             .collect();
         candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-        candidates.truncate(budget);
+        let cap = cfg.max_atomic_chars.map_or(budget, |max| max.min(budget));
+        candidates.truncate(cap);
         for (_, ch) in candidates {
             let internal_id = tokens.len() as u32;
             let mut buf = [0u8; 4];
@@ -97,6 +98,21 @@ mod tests {
         for (i, t) in tokens.iter().enumerate() {
             assert_eq!(t.internal_id as usize, i);
         }
+    }
+
+    #[test]
+    fn max_atomic_chars_caps_candidates() {
+        let cfg = TrainConfig {
+            vocab_size: 300,
+            max_atomic_chars: Some(2),
+            ..TrainConfig::default()
+        };
+        let mut counts = FxHashMap::default();
+        for ch in ['あ', 'い', 'う', 'え'] {
+            counts.insert(ch, 10u64);
+        }
+        let (_, map) = init_tokens(&cfg, &counts).unwrap();
+        assert_eq!(map.len(), 2);
     }
 
     #[test]

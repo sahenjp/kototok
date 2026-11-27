@@ -4,7 +4,7 @@
 
 use std::str::FromStr;
 
-use kototok_core::{Model, Tokenizer as CoreTokenizer};
+use kototok_core::{Model, ModelFormat, Tokenizer as CoreTokenizer};
 use kototok_train::{TrainPreset, train as train_model};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -14,7 +14,7 @@ fn to_value_err<E: std::fmt::Display>(e: E) -> PyErr {
     PyValueError::new_err(e.to_string())
 }
 
-/// AsymScript-BPE tokenizer loaded from a `.ktok` model.
+/// AsymScript-BPE tokenizer loaded from any supported model format.
 #[pyclass(name = "Tokenizer", frozen)]
 struct PyTokenizer {
     inner: CoreTokenizer,
@@ -22,7 +22,7 @@ struct PyTokenizer {
 
 #[pymethods]
 impl PyTokenizer {
-    /// Load a `.ktok` (binary) or `.json` model file.
+    /// Load a `.ktok`, HF `tokenizer.json`/directory, `.tiktoken`, `vocab.json`+`merges.txt` directory, or kototok `.json` model.
     #[staticmethod]
     #[pyo3(signature = (path, tags = None))]
     fn load(path: &str, tags: Option<Vec<String>>) -> PyResult<Self> {
@@ -87,9 +87,43 @@ impl PyTokenizer {
         self.inner.model().vocab_size()
     }
 
-    /// Save the model as `.ktok` binary.
-    fn save(&self, path: &str) -> PyResult<()> {
-        self.inner.model().save_binary(path).map_err(to_value_err)
+    /// Save the model, inferring the format from `path` unless `format` is given.
+    ///
+    /// Supported formats: `ktok`, `json`, `hf`, `hf-dir`, `tiktoken`, `bpe`.
+    #[pyo3(signature = (path, format = None))]
+    fn save(&self, path: &str, format: Option<&str>) -> PyResult<()> {
+        if let Some(format) = format {
+            let format = ModelFormat::from_str(format).map_err(to_value_err)?;
+            self.inner
+                .model()
+                .save_with_format(path, format)
+                .map_err(to_value_err)
+        } else {
+            self.inner.model().save_auto(path).map_err(to_value_err)
+        }
+    }
+
+    /// Save as a Hugging Face `tokenizer.json` file.
+    fn save_hf(&self, path: &str) -> PyResult<()> {
+        self.inner.model().save_hf_json(path).map_err(to_value_err)
+    }
+
+    /// Save as a Hugging Face tokenizer directory.
+    fn save_hf_dir(&self, path: &str) -> PyResult<()> {
+        self.inner.model().save_hf_dir(path).map_err(to_value_err)
+    }
+
+    /// Save as a tiktoken mergeable-rank table.
+    fn save_tiktoken(&self, path: &str) -> PyResult<()> {
+        self.inner.model().save_tiktoken(path).map_err(to_value_err)
+    }
+
+    /// Save as a GPT-2-style `vocab.json`/`merges.txt` directory.
+    fn save_bpe(&self, path: &str) -> PyResult<()> {
+        self.inner
+            .model()
+            .save_bpe_files(path)
+            .map_err(to_value_err)
     }
 
     fn __repr__(&self) -> String {
@@ -102,10 +136,11 @@ impl PyTokenizer {
 
 /// Train a tokenizer on a UTF-8 corpus file.
 ///
-/// `input` is a corpus text path. When `output` is given, the `.ktok` model is
-/// saved there. Returns a ready-to-use `Tokenizer`.
+/// `input` is a corpus text path. When `output` is given, the model is saved
+/// there in the format inferred from the path unless `format` is given.
+/// Returns a ready-to-use `Tokenizer`.
 #[pyfunction]
-#[pyo3(signature = (input, output=None, vocab_size=4096, preset="asym-full", threads=0))]
+#[pyo3(signature = (input, output=None, vocab_size=4096, preset="asym-full", threads=0, format=None))]
 fn train(
     py: Python<'_>,
     input: &str,
@@ -113,9 +148,14 @@ fn train(
     vocab_size: usize,
     preset: &str,
     threads: usize,
+    format: Option<&str>,
 ) -> PyResult<PyTokenizer> {
     let preset = TrainPreset::from_str(preset)
         .map_err(|_| PyValueError::new_err(format!("unknown preset: {preset}")))?;
+    let format = format
+        .map(ModelFormat::from_str)
+        .transpose()
+        .map_err(to_value_err)?;
     let corpus = std::fs::read_to_string(input).map_err(|e| PyIOError::new_err(e.to_string()))?;
     let cfg = preset.config(vocab_size);
 
@@ -130,7 +170,11 @@ fn train(
     })?;
 
     if let Some(path) = output {
-        model.save_binary(path).map_err(to_value_err)?;
+        if let Some(format) = format {
+            model.save_with_format(path, format).map_err(to_value_err)?;
+        } else {
+            model.save_auto(path).map_err(to_value_err)?;
+        }
     }
     let inner = CoreTokenizer::from_model(model).map_err(to_value_err)?;
     Ok(PyTokenizer { inner })
@@ -142,12 +186,28 @@ fn presets() -> Vec<&'static str> {
     TrainPreset::ALL.iter().map(|p| p.name()).collect()
 }
 
+/// Detect the format of an existing model file or directory.
+#[pyfunction]
+fn detect_format(path: &str) -> PyResult<String> {
+    Model::detect_format(path)
+        .map(|format| format.to_string())
+        .map_err(to_value_err)
+}
+
+/// List the supported model format names.
+#[pyfunction]
+fn formats() -> Vec<&'static str> {
+    vec!["ktok", "json", "hf", "hf-dir", "tiktoken", "bpe"]
+}
+
 /// Python module entry point.
 #[pymodule]
 fn kototok(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyTokenizer>()?;
     m.add_function(wrap_pyfunction!(train, m)?)?;
     m.add_function(wrap_pyfunction!(presets, m)?)?;
+    m.add_function(wrap_pyfunction!(detect_format, m)?)?;
+    m.add_function(wrap_pyfunction!(formats, m)?)?;
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }

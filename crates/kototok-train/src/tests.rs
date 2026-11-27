@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use kototok_core::{ByteMode, Model, Tokenizer};
+use kototok_core::{ByteMode, Model, Tokenizer, VocabEvent};
 
 use crate::{TrainPreset, train};
 
@@ -181,4 +181,77 @@ fn beg_gate_training_smoke() {
     let text = "ミカンも食べる。天気が悪い。";
     let ids = tok.encode(text).unwrap();
     assert_eq!(tok.decode(&ids).unwrap(), text);
+}
+
+#[test]
+fn self_pairs_prune_and_contextual_merges_match_reference() {
+    let corpus = concat!(
+        "aaaa aaaaa aaaaaa abab ababc。\n",
+        "新たな食べる。食べた食べて。調べる。\n",
+        "天気の話、天気は晴れ、天気が悪い、天気を見る、天気に注意、",
+        "天気で決まる、天気と予報、天気から分かる。\n",
+        "writing code writing software。\n",
+        "writing tests writing software。\n",
+    )
+    .repeat(6)
+        + "aaa aa aab aabb。\n";
+    let mut cfg = TrainPreset::AsymFull.config(380);
+    cfg.picky_ios_threshold = 0.50;
+    cfg.phase1_vocab_ratio = 0.9;
+
+    // Ranks and operands from the original trainer. Turning BEG off
+    // leaves ACSG enabled and changes the ordering of the Phase-2 pairs.
+    for (beg_strength, rank, left, right, result) in
+        [(3.0, 137, 351, 353, 378), (0.0, 129, 341, 343, 370)]
+    {
+        cfg.beg_strength = beg_strength;
+        let model = train(&corpus, &cfg).unwrap();
+        assert_eq!(model.metadata.phase2_start_rank, 127);
+        assert_eq!(model.metadata.pruned_count, 49);
+        assert_eq!(model.events.len(), 145);
+        let a = u32::from(b'a');
+        let aa = 290;
+        assert_eq!(
+            model.events[0],
+            VocabEvent::Merge {
+                left: a,
+                right: a,
+                result: aa,
+            }
+        );
+        assert_eq!(
+            model.events[9..11],
+            [
+                VocabEvent::Merge {
+                    left: aa,
+                    right: aa,
+                    result: 297,
+                },
+                VocabEvent::Prune {
+                    target: aa,
+                    split_into: vec![a, a],
+                },
+            ]
+        );
+        assert_eq!(
+            model.events[31],
+            VocabEvent::Merge {
+                left: u32::from(b'r'),
+                right: u32::from(b'i'),
+                result: 310,
+            }
+        );
+        assert_eq!(
+            model.events[rank],
+            VocabEvent::Merge {
+                left,
+                right,
+                result
+            }
+        );
+        let tok = Tokenizer::from_model(model).unwrap();
+        for sample in ["aaaa", "aaaaa", "aaaaaa", "食べた食べて"] {
+            assert_eq!(tok.decode(&tok.encode(sample).unwrap()).unwrap(), sample);
+        }
+    }
 }

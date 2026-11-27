@@ -16,6 +16,8 @@ pub struct TrainConfig {
     pub pretok: PreTokenizerConfig,
     /// Minimum corpus frequency for a non-ASCII `char` to become `AtomicChar`.
     pub min_char_freq: u64,
+    /// Maximum number of atomic non-ASCII characters admitted during vocabulary init.
+    pub max_atomic_chars: Option<usize>,
     /// Minimum adjacent pair frequency required for a merge candidate.
     pub min_pair_freq: u64,
     /// ACSG NPMI penalty exponent for `Kanji -> Hiragana` cross pairs (`0.0` disables).
@@ -44,6 +46,17 @@ pub struct TrainConfig {
     /// Maximum fraction of the Phase-2 vocabulary budget that pure-ASCII
     /// merges may occupy. `1.0` disables the quota.
     pub phase2_ascii_quota: f64,
+    /// Use the loose ASCII NPMI floor for every Phase-2 pair containing no Japanese script.
+    pub phase2_non_ja_loose: bool,
+    /// Minimum corpus frequency for a Phase-2 segment to participate in training.
+    pub min_segment_freq: u64,
+    /// Maximum number of chunks per Phase-2 training segment window (1..=16).
+    /// Smaller windows (e.g. 2-3) let repeated natural-language bigrams/trigrams
+    /// survive `min_segment_freq >= 2` without blowing up memory.
+    pub phase2_max_segment_chunks: usize,
+    /// When `min_segment_freq > 1`, decompose dropped low-frequency segments
+    /// into disjoint sub-windows of this length (`0` disables fallback).
+    pub phase2_fallback_window: usize,
     /// BEG strength: maximum NPMI exponent applied to `Kanji -> Hiragana`
     /// merges whose left Kanji run is a high-entropy (complete-noun) prefix.
     /// `0.0` disables the gate entirely.
@@ -91,6 +104,8 @@ pub enum TrainPreset {
     StrictScript,
     /// Standard GPT-style byte-level BPE baseline.
     StandardBbpe,
+    /// Multilingual + math + code global preset (not part of the six ablations).
+    Global,
 }
 
 impl TrainPreset {
@@ -113,11 +128,52 @@ impl TrainPreset {
             Self::AsymNoAcsg => "asym-no-acsg",
             Self::StrictScript => "strict-script",
             Self::StandardBbpe => "standard-bbpe",
+            Self::Global => "global",
         }
     }
 
     /// Builds the `TrainConfig` for this preset at `vocab_size`.
     pub fn config(self, vocab_size: usize) -> TrainConfig {
+        if self == Self::Global {
+            return TrainConfig {
+                name: self.name().to_string(),
+                vocab_size,
+                pretok: PreTokenizerConfig {
+                    mode: PreTokenizerMode::AsymScript,
+                    byte_mode: ByteMode::Utf8Atomic,
+                    attach_ascii_leading_space: true,
+                    max_digit_run: 3,
+                    max_chunk_chars: 128,
+                    max_segment_chunks: 64,
+                    multilingual_scripts: true,
+                    attach_space_to_punct: true,
+                },
+                min_char_freq: 5,
+                max_atomic_chars: Some(14_000),
+                min_pair_freq: 2,
+                acsg_npmi_beta: 0.0,
+                picky_enabled: true,
+                picky_ios_threshold: 0.90,
+                phase2_enabled: true,
+                phase1_vocab_ratio: 0.86,
+                phase2_min_npmi: 0.10,
+                phase2_min_npmi_ascii: 0.10,
+                phase2_min_npmi_okuri: 0.10,
+                phase2_ascii_quota: 1.0,
+                phase2_non_ja_loose: true,
+                min_segment_freq: 2,
+                phase2_max_segment_chunks: 16,
+                phase2_fallback_window: 3,
+                beg_strength: 0.0,
+                beg_stem_max: 0.7,
+                beg_noun_min: 1.8,
+                beg_particle_lo: 6.0,
+                beg_particle_hi: 9.0,
+                beg_phase2: false,
+                beg_okuri_boost: 0.0,
+                special_tokens: Vec::new(),
+            };
+        }
         let (mode, byte_mode) = match self {
             Self::StandardBbpe => (PreTokenizerMode::StandardGpt, ByteMode::RawBytes),
             Self::StrictScript => (PreTokenizerMode::StrictScript, ByteMode::Utf8Atomic),
@@ -132,6 +188,7 @@ impl TrainPreset {
                 ..PreTokenizerConfig::default()
             },
             min_char_freq: 2,
+            max_atomic_chars: None,
             min_pair_freq: 2,
             acsg_npmi_beta: match self {
                 Self::AsymFull | Self::AsymNoPhase2 | Self::AsymNoPicky => 1.0,
@@ -145,6 +202,10 @@ impl TrainPreset {
             phase2_min_npmi_ascii: if self == Self::AsymFull { 0.10 } else { 0.25 },
             phase2_min_npmi_okuri: if self == Self::AsymFull { 0.45 } else { 0.25 },
             phase2_ascii_quota: if self == Self::AsymFull { 0.30 } else { 1.0 },
+            phase2_non_ja_loose: false,
+            min_segment_freq: 1,
+            phase2_max_segment_chunks: 16,
+            phase2_fallback_window: 0,
             beg_strength: if self == Self::AsymFull { 3.0 } else { 0.0 },
             beg_stem_max: 0.7,
             beg_noun_min: 1.8,
@@ -174,8 +235,9 @@ impl FromStr for TrainPreset {
             "asym-no-acsg" => Ok(Self::AsymNoAcsg),
             "strict-script" => Ok(Self::StrictScript),
             "standard-bbpe" => Ok(Self::StandardBbpe),
+            "global" | "asym-global" => Ok(Self::Global),
             other => Err(format!(
-                "unknown preset '{other}' (expected one of: {})",
+                "unknown preset '{other}' (expected one of: {}, global)",
                 Self::ALL
                     .iter()
                     .map(|p| p.name())
@@ -196,6 +258,16 @@ mod tests {
             assert_eq!(TrainPreset::from_str(p.name()).unwrap(), p);
             assert_eq!(p.to_string(), p.name());
         }
+        assert_eq!(
+            TrainPreset::from_str("global").unwrap(),
+            TrainPreset::Global
+        );
+        assert_eq!(
+            TrainPreset::from_str("asym-global").unwrap(),
+            TrainPreset::Global
+        );
+        assert_eq!(TrainPreset::ALL.len(), 6);
+        assert!(!TrainPreset::ALL.contains(&TrainPreset::Global));
         assert!(TrainPreset::from_str("nope").is_err());
     }
 
@@ -217,5 +289,14 @@ mod tests {
         let bbpe = TrainPreset::StandardBbpe.config(4096);
         assert_eq!(bbpe.pretok.mode, PreTokenizerMode::StandardGpt);
         assert_eq!(bbpe.pretok.byte_mode, ByteMode::RawBytes);
+
+        let global = TrainPreset::Global.config(32_768);
+        assert!(global.pretok.multilingual_scripts);
+        assert!(global.pretok.attach_space_to_punct);
+        assert_eq!(global.max_atomic_chars, Some(14_000));
+        assert_eq!(global.min_segment_freq, 2);
+        assert!(global.phase2_non_ja_loose);
+        assert_eq!(global.phase1_vocab_ratio, 0.86);
+        assert_eq!(global.phase2_fallback_window, 3);
     }
 }

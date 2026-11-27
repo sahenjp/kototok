@@ -66,6 +66,7 @@ pub struct Tokenizer {
 impl Tokenizer {
     /// Compiles a `Model` into an executable `Tokenizer`.
     pub fn from_model(model: Model) -> Result<Self, KototokError> {
+        model.validate_final_id_sparsity()?;
         let n_internal = model.internal_tokens.len();
         if n_internal < 256 {
             return Err(KototokError::InvalidFormat(
@@ -617,6 +618,16 @@ mod tests {
             kind: TokenKind::AtomicChar,
             final_id: Some(id),
         }
+    }
+
+    #[test]
+    fn tokenizer_rejects_sparse_final_id() {
+        let mut model = base_model(vec![], vec![], 0);
+        model.internal_tokens[0].final_id = Some(u32::MAX - 1);
+        assert!(matches!(
+            Tokenizer::from_model(model),
+            Err(KototokError::InvalidFormat(_))
+        ));
     }
 
     #[test]

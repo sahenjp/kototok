@@ -9,20 +9,20 @@
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
+use std::collections::hash_map::Entry;
+use std::time::Instant;
 
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use kototok_core::{
     ByteMode, InternalToken, KTOK_FORMAT_VERSION, KototokError, Model, ModelMetadata, ScriptClass,
-    TokenKind, Tokenizer, VocabEvent, classify_char, is_kanji_to_hiragana_cross,
+    TokenKind, Tokenizer, VocabEvent, classify_char, is_japanese_bytes, is_kanji_to_hiragana_cross,
 };
 
 use crate::config::TrainConfig;
-use crate::counter::{CorpusCounts, count_corpus};
+use crate::counter::{corpus_blocks, count_phase1, count_segments};
 use crate::vocab_init::init_tokens;
-
-const NIL: usize = usize::MAX;
 
 /// Errors produced by [`train`].
 #[derive(Debug, thiserror::Error)]
@@ -37,9 +37,12 @@ pub enum TrainError {
 
 /// Trains a `Model` on `corpus` according to `cfg`.
 pub fn train(corpus: &str, cfg: &TrainConfig) -> Result<Model, TrainError> {
-    let counts = count_corpus(corpus, cfg);
+    let started = std::env::var_os("KOTOTOK_PROGRESS").map(|_| Instant::now());
+    let blocks = corpus_blocks(corpus);
+    let mut counts = count_phase1(&blocks, cfg);
     let (tokens, char_to_id) = init_tokens(cfg, &counts.char_counts)?;
     let mut trainer = Trainer::new(cfg.clone(), tokens, char_to_id);
+    trainer.started = started;
     if cfg.beg_strength > 0.0 {
         trainer.beg = crate::beg::build_beg_scores(
             &counts,
@@ -66,7 +69,20 @@ pub fn train(corpus: &str, cfg: &TrainConfig) -> Result<Model, TrainError> {
             }
         }
     }
-    trainer.run(&counts)?;
+    let chunks = std::mem::take(&mut counts.chunk_counts);
+    drop(counts);
+    trainer.run_phase1(&chunks);
+    if cfg.phase2_enabled && trainer.alive_vocab_count < cfg.vocab_size {
+        trainer.drop_phase_state();
+        let mut table: Vec<_> = chunks.into_keys().collect();
+        table.sort_unstable();
+        trainer.progress("phase2 counting");
+        let segments = count_segments(&blocks, cfg, &table);
+        if started.is_some() {
+            eprintln!("[train] phase2 retained_segments={}", segments.len());
+        }
+        trainer.run_phase2(table, segments)?;
+    }
     Ok(trainer.finalize())
 }
 
@@ -89,17 +105,13 @@ impl PartialOrd for Score {
 }
 
 type Heap = BinaryHeap<(Score, Reverse<(u32, u32)>)>;
+type Pair = (u32, u32);
 
-/// Doubly-linked node in a word's symbol chain.
-#[derive(Clone, Copy)]
-struct Node {
-    sym: u32,
-    prev: usize,
-    next: usize,
-}
+const POSTING_INSERT: u32 = 0;
+const POSTING_REMOVE: u32 = 1;
 
 struct Word {
-    head: usize,
+    syms: Vec<u32>,
     weight: u64,
 }
 
@@ -122,13 +134,19 @@ struct Trainer {
     char_to_id: FxHashMap<char, u32>,
     phase1_vocab_size: usize,
     phase2_start_rank: u32,
+    started: Option<Instant>,
 
     // Per-phase engine state (rebuilt by `load_words`).
     words: Vec<Word>,
-    nodes: Vec<Node>,
-    pair_counts: FxHashMap<(u32, u32), u64>,
-    pair_to_words: FxHashMap<(u32, u32), FxHashSet<usize>>,
-    sym_to_words: Vec<FxHashSet<usize>>,
+    pair_counts: FxHashMap<Pair, u64>,
+    pair_to_words: FxHashMap<Pair, Vec<u32>>,
+    // Contextual PickyBPE may restore a vanished pair. Preserve its
+    // posting history outside the live index so its traversal is unchanged.
+    empty_pair_postings: FxHashMap<Pair, Vec<u32>>,
+    contextual_picky: bool,
+    // Only Phase-1 merges from a PickyBPE run get a posting list.
+    first_prunable_id: usize,
+    sym_to_words: Vec<Vec<u32>>,
     sym_counts: Vec<u64>,
     total_pairs: u64,
     heap: Heap,
@@ -154,11 +172,14 @@ impl Trainer {
             char_to_id,
             phase1_vocab_size: n,
             phase2_start_rank: 0,
+            started: None,
             words: Vec::new(),
-            nodes: Vec::new(),
             pair_counts: FxHashMap::default(),
             pair_to_words: FxHashMap::default(),
-            sym_to_words: vec![FxHashSet::default(); n],
+            empty_pair_postings: FxHashMap::default(),
+            contextual_picky: false,
+            first_prunable_id: n,
+            sym_to_words: Vec::new(),
             sym_counts: vec![0; n],
             phase2_budget: 0,
             phase2_ascii_merges: 0,
@@ -171,12 +192,16 @@ impl Trainer {
         }
     }
 
-    fn run(&mut self, counts: &CorpusCounts) -> Result<(), TrainError> {
-        self.run_phase1(counts);
-        if self.cfg.phase2_enabled && self.alive_vocab_count < self.cfg.vocab_size {
-            self.run_phase2(counts)?;
+    fn progress(&self, status: &str) {
+        if let Some(started) = self.started {
+            eprintln!(
+                "[train] {status} vocab_count={} events={} pair_counts={} elapsed_secs={:.2}",
+                self.alive_vocab_count,
+                self.events.len(),
+                self.pair_counts.len(),
+                started.elapsed().as_secs_f64(),
+            );
         }
-        Ok(())
     }
 
     fn phase1_target(&self) -> usize {
@@ -189,21 +214,38 @@ impl Trainer {
         }
     }
 
-    fn run_phase1(&mut self, counts: &CorpusCounts) {
-        let mut items = Vec::with_capacity(counts.chunk_counts.len());
-        for (bytes, &weight) in &counts.chunk_counts {
-            let syms = self.initial_ids(bytes);
-            if !syms.is_empty() {
-                items.push((syms, weight));
-            }
-        }
-        self.load_words(items, Phase::One);
+    fn run_phase1(&mut self, chunks: &FxHashMap<Box<[u8]>, u64>) {
+        let words = chunks
+            .iter()
+            .map(|(bytes, &weight)| Word {
+                syms: self.initial_ids(bytes),
+                weight,
+            })
+            .collect();
+        self.load_words(words, Phase::One);
+        self.progress("phase1 start");
         self.run_merges(self.phase1_target(), Phase::One);
+        self.progress("phase1 end");
         self.phase1_vocab_size = self.alive_vocab_count;
         self.phase2_start_rank = self.events.len() as u32;
     }
 
-    fn run_phase2(&mut self, counts: &CorpusCounts) -> Result<(), TrainError> {
+    fn drop_phase_state(&mut self) {
+        self.words = Vec::new();
+        self.pair_counts = FxHashMap::default();
+        self.pair_to_words = FxHashMap::default();
+        self.empty_pair_postings = FxHashMap::default();
+        self.sym_to_words = Vec::new();
+        self.sym_counts = Vec::new();
+        self.total_pairs = 0;
+        self.heap = Heap::new();
+    }
+
+    fn run_phase2(
+        &mut self,
+        table: Vec<Box<[u8]>>,
+        segments: FxHashMap<Box<[u32]>, u64>,
+    ) -> Result<(), TrainError> {
         self.phase2_budget = self.cfg.vocab_size.saturating_sub(self.alive_vocab_count);
         self.phase2_ascii_merges = 0;
         // Compile a temporary Phase-1-only tokenizer to encode every unique
@@ -231,24 +273,41 @@ impl Trainer {
             tagged_prunes: Vec::new(),
         };
         let tok = Tokenizer::from_model(model)?;
-        let enc: Vec<Vec<u32>> = counts
-            .chunk_table
-            .par_iter()
-            .map(|b| tok.encode_phase1_internal(b).map(|v| v.to_vec()))
-            .collect::<Result<_, _>>()?;
-
-        let mut items = Vec::with_capacity(counts.segments.len());
-        for (seq, &weight) in &counts.segments {
-            let mut ids = Vec::new();
-            for &cid in seq {
-                ids.extend_from_slice(&enc[cid as usize]);
-            }
-            if ids.len() >= 2 {
-                items.push((ids, weight));
+        let mut used = vec![false; table.len()];
+        for seq in segments.keys() {
+            for &cid in seq.iter() {
+                used[cid as usize] = true;
             }
         }
-        self.load_words(items, Phase::Two);
+        let enc: Vec<Vec<u32>> = table
+            .into_par_iter()
+            .zip(used.into_par_iter())
+            .map(|(bytes, used)| {
+                if used {
+                    tok.encode_phase1_internal(&bytes).map(|v| v.to_vec())
+                } else {
+                    Ok(Vec::new())
+                }
+            })
+            .collect::<Result<_, _>>()?;
+        drop(tok);
+
+        let mut words = Vec::with_capacity(segments.len());
+        for (seq, weight) in segments {
+            let len = seq.iter().map(|&cid| enc[cid as usize].len()).sum();
+            if len >= 2 {
+                let mut syms = Vec::with_capacity(len);
+                for &cid in seq.iter() {
+                    syms.extend_from_slice(&enc[cid as usize]);
+                }
+                words.push(Word { syms, weight });
+            }
+        }
+        drop(enc);
+        self.load_words(words, Phase::Two);
+        self.progress("phase2 start");
         self.run_merges(self.cfg.vocab_size, Phase::Two);
+        self.progress("phase2 end");
         Ok(())
     }
 
@@ -297,139 +356,176 @@ impl Trainer {
         }
     }
 
-    /// Rebuilds the word/node/count engine for a phase.
-    fn load_words(&mut self, items: Vec<(Vec<u32>, u64)>, phase: Phase) {
-        self.words.clear();
-        self.nodes.clear();
-        self.pair_counts.clear();
-        self.pair_to_words.clear();
-        self.total_pairs = 0;
-        self.heap.clear();
+    /// Builds weighted counts and postings for a fresh phase.
+    fn load_words(&mut self, words: Vec<Word>, phase: Phase) {
+        let contextual = self.has_contextual_scores(phase);
+        self.contextual_picky = contextual && phase == Phase::One && self.cfg.picky_enabled;
         self.sym_counts = vec![0; self.tokens.len()];
-        self.sym_to_words = vec![FxHashSet::default(); self.tokens.len()];
+        if phase == Phase::Two {
+            // Pass 1: exact symbol counts, total_pairs, and initial pair counts.
+            // Phase 2 never prunes, so pre-existing pairs below `min_pair_freq`
+            // can never become mergeable and need no postings.
+            for word in &words {
+                for &sym in &word.syms {
+                    self.sym_counts[sym as usize] += word.weight;
+                }
+                for pair in word.syms.windows(2) {
+                    self.add_pair((pair[0], pair[1]), word.weight);
+                }
+            }
+            let min_f = self.cfg.min_pair_freq;
+            self.pair_counts.retain(|_, count| *count >= min_f);
+            self.pair_counts.shrink_to_fit();
 
-        for (syms, weight) in items {
-            if syms.is_empty() {
-                continue;
+            let mut active = Vec::new();
+            for word in words {
+                if !word
+                    .syms
+                    .windows(2)
+                    .any(|p| self.pair_counts.contains_key(&(p[0], p[1])))
+                {
+                    continue;
+                }
+                let w = active.len() as u32;
+                for pair in word.syms.windows(2) {
+                    let pair = (pair[0], pair[1]);
+                    if self.pair_counts.contains_key(&pair) {
+                        self.record_pair(pair, w, contextual);
+                    }
+                }
+                active.push(word);
             }
-            let w = self.words.len();
-            self.words.push(Word {
-                head: self.nodes.len(),
-                weight,
-            });
-            for (i, &s) in syms.iter().enumerate() {
-                let next = if i + 1 == syms.len() {
-                    NIL
-                } else {
-                    self.nodes.len() + 1
-                };
-                self.nodes.push(Node {
-                    sym: s,
-                    prev: if i == 0 { NIL } else { self.nodes.len() - 1 },
-                    next,
-                });
-                self.sym_counts[s as usize] += weight;
-                self.sym_to_words[s as usize].insert(w);
+            self.words = active;
+        } else {
+            for (w, word) in words.iter().enumerate() {
+                for &sym in &word.syms {
+                    self.sym_counts[sym as usize] += word.weight;
+                }
+                for pair in word.syms.windows(2) {
+                    let pair = (pair[0], pair[1]);
+                    self.add_pair(pair, word.weight);
+                    self.record_pair(pair, w as u32, contextual);
+                }
             }
-            for win in syms.windows(2) {
-                let p = (win[0], win[1]);
-                *self.pair_counts.entry(p).or_default() += weight;
-                self.pair_to_words.entry(p).or_default().insert(w);
-                self.total_pairs += weight;
-            }
+            self.words = words;
         }
 
-        let keys: Vec<(u32, u32)> = self.pair_counts.keys().copied().collect();
+        let keys: Vec<_> = self.pair_counts.keys().copied().collect();
         for (l, r) in keys {
             self.push_candidate(l, r, phase);
         }
     }
 
-    fn ensure_sym(&mut self, id: u32) {
-        let i = id as usize;
-        if self.sym_counts.len() <= i {
-            self.sym_counts.resize(i + 1, 0);
-            self.sym_to_words.resize_with(i + 1, FxHashSet::default);
+    fn add_pair(&mut self, pair: Pair, weight: u64) -> bool {
+        let is_new = match self.pair_counts.entry(pair) {
+            Entry::Occupied(mut entry) => {
+                *entry.get_mut() += weight;
+                false
+            }
+            Entry::Vacant(entry) => {
+                entry.insert(weight);
+                true
+            }
+        };
+        self.total_pairs += weight;
+        is_new
+    }
+
+    fn record_pair(&mut self, pair: Pair, word: u32, initial: bool) {
+        if self.contextual_picky {
+            if self.seen.contains(&pair) {
+                return;
+            }
+            let words = self
+                .pair_to_words
+                .entry(pair)
+                .or_insert_with(|| self.empty_pair_postings.remove(&pair).unwrap_or_default());
+            if initial || !words.ends_with(&[POSTING_INSERT, word]) {
+                words.extend([POSTING_INSERT, word]);
+            }
+        } else {
+            let words = self.pair_to_words.entry(pair).or_default();
+            // The legacy index inserted each initial occurrence, including
+            // duplicates, which can grow a full hash set before its lookup.
+            if initial || words.last() != Some(&word) {
+                words.push(word);
+            }
         }
     }
 
-    /// Collects the live symbol chain of a word.
-    fn word_syms(&self, w: usize) -> Vec<u32> {
-        let mut out = Vec::new();
-        let mut n = self.words[w].head;
-        while n != NIL {
-            out.push(self.nodes[n].sym);
-            n = self.nodes[n].next;
+    fn remove_pair(&mut self, pair: Pair, weight: u64) {
+        if let Some(count) = self.pair_counts.get_mut(&pair) {
+            *count = count.saturating_sub(weight);
+            if *count == 0 {
+                self.pair_counts.remove(&pair);
+                if !self.contextual_picky {
+                    self.pair_to_words.remove(&pair);
+                }
+            }
         }
-        out
+        self.total_pairs -= weight;
     }
 
-    fn sym_multiset(v: &[u32]) -> FxHashMap<u32, u64> {
-        let mut m = FxHashMap::default();
-        for &s in v {
-            *m.entry(s).or_default() += 1;
+    fn remove_pair_posting(&mut self, pair: Pair, word: u32) {
+        if let Some(words) = self.pair_to_words.get_mut(&pair) {
+            words.extend([POSTING_REMOVE, word]);
+            if !self.pair_counts.contains_key(&pair) {
+                let history = self.pair_to_words.remove(&pair).unwrap();
+                self.empty_pair_postings.insert(pair, history);
+            }
         }
-        m
     }
 
-    fn pair_multiset(v: &[u32]) -> FxHashMap<(u32, u32), u64> {
-        let mut m = FxHashMap::default();
-        for win in v.windows(2) {
-            *m.entry((win[0], win[1])).or_default() += 1;
+    fn record_prunable(&mut self, sym: u32, word: u32) {
+        if let Some(words) = (sym as usize)
+            .checked_sub(self.first_prunable_id)
+            .and_then(|index| self.sym_to_words.get_mut(index))
+        {
+            if self.contextual_picky {
+                if !words.ends_with(&[POSTING_INSERT, word]) {
+                    words.extend([POSTING_INSERT, word]);
+                }
+            } else if words.last() != Some(&word) {
+                words.push(word);
+            }
         }
-        m
     }
 
-    /// Applies old->new word diffs to all count/membership indexes and pushes
-    /// every newly present pair as a merge candidate.
-    fn apply_diff(&mut self, w: usize, old_v: &[u32], new_v: &[u32], phase: Phase) {
-        let weight = self.words[w].weight;
-        let old_syms = Self::sym_multiset(old_v);
-        let new_syms = Self::sym_multiset(new_v);
-        let old_pairs = Self::pair_multiset(old_v);
-        let new_pairs = Self::pair_multiset(new_v);
+    fn has_contextual_scores(&self, phase: Phase) -> bool {
+        phase == Phase::Two
+            || self.cfg.beg_strength > 0.0
+            || self.cfg.acsg_npmi_beta > 0.0
+            || self.cfg.beg_okuri_boost > 0.0
+    }
 
-        for (&s, &oc) in &old_syms {
-            let nc = new_syms.get(&s).copied().unwrap_or(0);
-            if oc != nc {
-                self.sym_counts[s as usize] -= oc * weight;
-                self.sym_counts[s as usize] += nc * weight;
-            }
-            if nc == 0 {
-                self.sym_to_words[s as usize].remove(&w);
-            }
+    /// Contextual scores are refreshed after each affected word, so their
+    /// lazy heap depends on the original hash-set traversal order.
+    fn order_postings(&self, ws: &mut Vec<u32>, contextual: bool) {
+        if ws.len() < 2 {
+            return;
         }
-        for (&s, &nc) in &new_syms {
-            if !old_syms.contains_key(&s) {
-                self.sym_counts[s as usize] += nc * weight;
-                self.sym_to_words[s as usize].insert(w);
+        if contextual {
+            let mut words = FxHashSet::default();
+            if self.contextual_picky {
+                for &[op, word] in ws.as_chunks::<2>().0 {
+                    if op == POSTING_INSERT {
+                        words.insert(word);
+                    } else {
+                        words.remove(&word);
+                    }
+                }
+            } else {
+                for &w in ws.iter() {
+                    words.insert(w);
+                }
             }
-        }
-
-        for (&p, &oc) in &old_pairs {
-            let nc = new_pairs.get(&p).copied().unwrap_or(0);
-            if oc != nc {
-                let e = self.pair_counts.entry(p).or_default();
-                *e -= oc * weight;
-                *e += nc * weight;
-                self.total_pairs -= oc * weight;
-                self.total_pairs += nc * weight;
+            ws.clear();
+            ws.extend(words);
+        } else {
+            if !ws.is_sorted() {
+                ws.sort_unstable();
             }
-            if nc == 0
-                && let Some(set) = self.pair_to_words.get_mut(&p)
-            {
-                set.remove(&w);
-            }
-        }
-        for (&p, &nc) in &new_pairs {
-            if !old_pairs.contains_key(&p) {
-                *self.pair_counts.entry(p).or_default() += nc * weight;
-                self.total_pairs += nc * weight;
-                self.pair_to_words.entry(p).or_default().insert(w);
-            }
-        }
-        for &(l, r) in new_pairs.keys() {
-            self.push_candidate(l, r, phase);
+            ws.dedup();
         }
     }
 
@@ -470,6 +566,9 @@ impl Trainer {
         }
         let lb = &self.tokens[l as usize].bytes;
         let rb = &self.tokens[r as usize].bytes;
+        if self.cfg.phase2_non_ja_loose && !is_japanese_bytes(lb) && !is_japanese_bytes(rb) {
+            return self.cfg.phase2_min_npmi_ascii;
+        }
         if is_kanji_to_hiragana_cross(lb, rb) {
             let hira = crate::beg::leading_hiragana_run(rb);
             let gate_r = self.beg.hira.get(hira).copied().unwrap_or(0.0);
@@ -585,6 +684,9 @@ impl Trainer {
     fn score(&self, l: u32, r: u32, f_ab: u64, phase: Phase) -> f64 {
         match phase {
             Phase::One => {
+                if !self.has_contextual_scores(phase) {
+                    return f_ab as f64;
+                }
                 let lb = &self.tokens[l as usize].bytes;
                 let rb = &self.tokens[r as usize].bytes;
                 if !is_kanji_to_hiragana_cross(lb, rb) {
@@ -686,6 +788,7 @@ impl Trainer {
     /// Lazy max-heap loop: pops the best-scored unseen pair, revalidates it,
     /// merges, then applies PickyBPE IoS pruning (Phase 1 only).
     fn run_merges(&mut self, target: usize, phase: Phase) {
+        let mut merges = 0usize;
         while self.alive_vocab_count < target {
             let Some((Score(s), Reverse((l, r)))) = self.heap.pop() else {
                 break;
@@ -740,6 +843,13 @@ impl Trainer {
                     self.do_prune(r, phase);
                 }
             }
+            merges += 1;
+            if merges.is_multiple_of(25_000) {
+                self.progress(match phase {
+                    Phase::One => "phase1 merge",
+                    Phase::Two => "phase2 merge",
+                });
+            }
         }
     }
 
@@ -762,53 +872,119 @@ impl Trainer {
         self.alive.push(true);
         self.parents.push(Some((l, r)));
         self.alive_vocab_count += 1;
-        self.ensure_sym(new_id);
+        self.sym_counts.push(0);
+        if phase == Phase::One && self.cfg.picky_enabled {
+            self.sym_to_words.push(Vec::new());
+        }
         self.seen.insert((l, r));
         self.events.push(VocabEvent::Merge {
             left: l,
             right: r,
             result: new_id,
         });
-        let ws: Vec<usize> = self
-            .pair_to_words
-            .get(&(l, r))
-            .map(|set| set.iter().copied().collect())
-            .unwrap_or_default();
+        let mut ws = self.pair_to_words.remove(&(l, r)).unwrap_or_default();
+        let contextual = self.has_contextual_scores(phase);
+        self.order_postings(&mut ws, contextual);
+        let mut new_pairs = Vec::new();
+        let mut removed_pairs = Vec::new();
         for w in ws {
-            self.merge_in_word(w, l, r, new_id, phase);
+            let mut syms = std::mem::take(&mut self.words[w as usize].syms);
+            if self.merge_in_word(
+                w,
+                &mut syms,
+                (l, r),
+                new_id,
+                &mut new_pairs,
+                &mut removed_pairs,
+            ) && contextual
+            {
+                // NPMI depends on all symbol counts, including for pairs
+                // whose frequency did not change in this word.
+                for pair in syms.windows(2) {
+                    self.push_candidate(pair[0], pair[1], phase);
+                }
+            }
+            self.words[w as usize].syms = syms;
+        }
+        if !contextual {
+            // These pairs contain a fresh id so their counts only increased.
+            for (left, right) in new_pairs {
+                self.push_candidate(left, right, phase);
+            }
         }
         new_id
     }
 
-    fn merge_in_word(&mut self, w: usize, l: u32, r: u32, new: u32, phase: Phase) {
-        let old_v = self.word_syms(w);
-        let mut n = self.words[w].head;
-        while n != NIL {
-            let m = self.nodes[n].next;
-            if m != NIL && self.nodes[n].sym == l && self.nodes[m].sym == r {
-                let p = self.nodes[n].prev;
-                let nx = self.nodes[m].next;
-                let k = self.nodes.len();
-                self.nodes.push(Node {
-                    sym: new,
-                    prev: p,
-                    next: nx,
-                });
-                if p != NIL {
-                    self.nodes[p].next = k;
-                } else {
-                    self.words[w].head = k;
-                }
-                if nx != NIL {
-                    self.nodes[nx].prev = k;
-                }
-                n = nx;
+    /// Compacts left-to-right, charging the original edges between groups
+    /// once, even when neighboring groups both collapse.
+    fn merge_in_word(
+        &mut self,
+        word: u32,
+        syms: &mut Vec<u32>,
+        pair: (u32, u32),
+        new: u32,
+        new_pairs: &mut Vec<(u32, u32)>,
+        removed_pairs: &mut Vec<Pair>,
+    ) -> bool {
+        let weight = self.words[word as usize].weight;
+        let (l, r) = pair;
+        let mut read = 0;
+        let mut write = 0;
+        let mut previous_input = 0;
+        let mut previous_merged = false;
+        let mut merged = 0;
+        while read < syms.len() {
+            let first = syms[read];
+            let collapse = first == l && syms.get(read + 1) == Some(&r);
+            let output = if collapse {
+                self.remove_pair(pair, weight);
+                merged += 1;
+                new
             } else {
-                n = m;
+                first
+            };
+            if write > 0 && (previous_merged || collapse) {
+                let removed = (previous_input, first);
+                self.remove_pair(removed, weight);
+                if self.contextual_picky {
+                    removed_pairs.push(removed);
+                }
+                let formed = (syms[write - 1], output);
+                if self.add_pair(formed, weight) {
+                    new_pairs.push(formed);
+                }
+                self.record_pair(formed, word, false);
+            }
+            syms[write] = output;
+            previous_merged = collapse;
+            previous_input = if collapse { r } else { first };
+            read += 1 + usize::from(collapse);
+            write += 1;
+        }
+        if merged == 0 {
+            return false;
+        }
+        syms.truncate(write);
+        let delta = merged * weight;
+        self.sym_counts[l as usize] -= delta;
+        self.sym_counts[r as usize] -= delta;
+        self.sym_counts[new as usize] += delta;
+        if self.contextual_picky {
+            for removed in removed_pairs.drain(..) {
+                if !syms.windows(2).any(|pair| (pair[0], pair[1]) == removed) {
+                    self.remove_pair_posting(removed, word);
+                }
+            }
+            for sym in [l, r] {
+                if let Some(index) = (sym as usize).checked_sub(self.first_prunable_id)
+                    && !syms.contains(&sym)
+                {
+                    self.sym_to_words[index].extend([POSTING_REMOVE, word]);
+                }
             }
         }
-        let new_v = self.word_syms(w);
-        self.apply_diff(w, &old_v, &new_v, phase);
+        self.record_prunable(new, word);
+        true
     }
 
     /// Executes a PickyBPE prune: expands `target`'s parents to alive tokens,
@@ -827,7 +1003,9 @@ impl Trainer {
         });
         self.alive[target as usize] = false;
         self.alive_vocab_count -= 1;
-        let ws: Vec<usize> = self.sym_to_words[target as usize].iter().copied().collect();
+        let mut ws =
+            std::mem::take(&mut self.sym_to_words[target as usize - self.first_prunable_id]);
+        self.order_postings(&mut ws, self.contextual_picky);
         for w in ws {
             self.split_in_word(w, target, &split, phase);
         }
@@ -844,57 +1022,73 @@ impl Trainer {
         }
     }
 
-    fn split_in_word(&mut self, w: usize, target: u32, split: &[u32], phase: Phase) {
-        let old_v = self.word_syms(w);
-        let mut n = self.words[w].head;
-        while n != NIL {
-            if self.nodes[n].sym != target {
-                n = self.nodes[n].next;
-                continue;
-            }
-            let p = self.nodes[n].prev;
-            let nx = self.nodes[n].next;
-            let mut prev_link = p;
-            let mut first = NIL;
-            let mut last = NIL;
-            for &s in split {
-                let k = self.nodes.len();
-                self.nodes.push(Node {
-                    sym: s,
-                    prev: prev_link,
-                    next: NIL,
-                });
-                if prev_link != NIL {
-                    self.nodes[prev_link].next = k;
-                } else {
-                    self.words[w].head = k;
-                }
-                if first == NIL {
-                    first = k;
-                }
-                prev_link = k;
-                last = k;
-            }
-            if first == NIL {
-                // Defensive: `split` is never empty in practice.
-                if p != NIL {
-                    self.nodes[p].next = nx;
-                } else {
-                    self.words[w].head = nx;
-                }
-                if nx != NIL {
-                    self.nodes[nx].prev = p;
-                }
-            } else {
-                self.nodes[last].next = nx;
-                if nx != NIL {
-                    self.nodes[nx].prev = last;
+    fn split_in_word(&mut self, word: u32, target: u32, split: &[u32], phase: Phase) {
+        let w = word as usize;
+        let weight = self.words[w].weight;
+        let mut syms = std::mem::take(&mut self.words[w].syms);
+        let original_len = syms.len();
+        let mut occurrences = 0;
+        let mut old_pairs = self.contextual_picky.then(|| {
+            syms.windows(2)
+                .map(|pair| (pair[0], pair[1]))
+                .collect::<FxHashSet<_>>()
+        });
+        for pair in syms.windows(2) {
+            if pair[0] == target || pair[1] == target {
+                let removed = (pair[0], pair[1]);
+                self.remove_pair(removed, weight);
+                if self.contextual_picky {
+                    self.remove_pair_posting(removed, word);
                 }
             }
-            n = nx;
         }
-        let new_v = self.word_syms(w);
-        self.apply_diff(w, &old_v, &new_v, phase);
+        for &sym in &syms {
+            occurrences += usize::from(sym == target);
+        }
+        if occurrences != 0 {
+            let delta = occurrences as u64 * weight;
+            self.sym_counts[target as usize] -= delta;
+            for &sym in split {
+                self.sym_counts[sym as usize] += delta;
+                if !self.contextual_picky || !syms.contains(&sym) {
+                    self.record_prunable(sym, word);
+                }
+            }
+
+            let new_len = original_len + occurrences * (split.len() - 1);
+            syms.resize(new_len, 0);
+            let mut write = new_len;
+            let mut right_expanded = false;
+            for read in (0..original_len).rev() {
+                let sym = syms[read];
+                let expanded = sym == target;
+                let replacement = if expanded {
+                    split
+                } else {
+                    std::slice::from_ref(&sym)
+                };
+                let boundary = (write < new_len && (expanded || right_expanded))
+                    .then(|| (replacement[replacement.len() - 1], syms[write]));
+                for pair in replacement
+                    .windows(2)
+                    .map(|pair| (pair[0], pair[1]))
+                    .chain(boundary)
+                {
+                    self.add_pair(pair, weight);
+                    if old_pairs.as_mut().is_none_or(|pairs| pairs.insert(pair)) {
+                        self.record_pair(pair, word, false);
+                    }
+                }
+                let start = write - replacement.len();
+                syms[start..write].copy_from_slice(replacement);
+                write = start;
+                right_expanded = expanded;
+            }
+            for pair in syms.windows(2) {
+                self.push_candidate(pair[0], pair[1], phase);
+            }
+        }
+        self.words[w].syms = syms;
     }
 
     /// Assigns dense `final_id`s to alive tokens in `internal_id` order and

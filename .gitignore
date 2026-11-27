@@ -13,6 +13,11 @@ eval/artifacts*/hf_export/
 eval/artifacts*/.fetch_cache/
 eval/artifacts*/sweep_results.json
 eval/artifacts_tune/
+eval/global_68/eval/
+eval/global_68/train_slices*/
+eval/global_68/train_global_*.txt
+eval/global_68/*.hf.json
+eval/global_68/hf_global_*.json
 /pylib
 *.ktok
 !models/*.ktok

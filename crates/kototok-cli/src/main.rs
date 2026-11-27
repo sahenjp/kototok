@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 use rayon::prelude::*;
 
 use kototok_core::{
-    InternalToken, KototokError, Model, TagRange, TokenKind, Tokenizer, VocabEvent,
+    InternalToken, KototokError, Model, ModelFormat, TagRange, TokenKind, Tokenizer, VocabEvent,
 };
 
 /// Selectable-segmentation policy: which provenance-tagged graft layers
@@ -51,17 +51,20 @@ struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 enum Command {
-    /// Train a tokenizer model on a UTF-8 corpus.
+    /// Train a tokenizer model on a UTF-8 corpus and save it in any supported format.
     Train {
         /// Corpus text file.
         #[arg(long)]
         input: PathBuf,
-        /// Output `.ktok` model path.
+        /// Output model path (`.ktok`, `tokenizer.json`, `.tiktoken`, `.json`, or a format directory).
         #[arg(long)]
         output: PathBuf,
-        /// Optional JSON export of the model.
+        /// Optional kototok JSON export of the model.
         #[arg(long)]
         json_out: Option<PathBuf>,
+        /// Explicit output format (`ktok`, `json`, `hf`, `hf-dir`, `tiktoken`, `bpe`).
+        #[arg(long, value_parser = parse_format)]
+        format: Option<ModelFormat>,
         /// Maximum vocabulary size.
         #[arg(long, default_value_t = 4096)]
         vocab_size: usize,
@@ -96,6 +99,30 @@ enum Command {
         /// Override minimum pair frequency.
         #[arg(long)]
         min_pair_freq: Option<u64>,
+        /// Enable multilingual script-aware pre-tokenization.
+        #[arg(long)]
+        multilingual: bool,
+        /// Attach single leading spaces to hard ASCII punctuation.
+        #[arg(long)]
+        attach_space_to_punct: bool,
+        /// Cap the number of atomic non-ASCII characters.
+        #[arg(long)]
+        max_atomic_chars: Option<usize>,
+        /// Minimum frequency for Phase-2 segments.
+        #[arg(long)]
+        min_segment_freq: Option<u64>,
+        /// Maximum chunks per Phase-2 training segment window (1..=16).
+        #[arg(long)]
+        phase2_max_seg: Option<usize>,
+        /// Fallback sub-window length for dropped low-frequency Phase-2 segments (`0` disables).
+        #[arg(long)]
+        phase2_fallback_window: Option<usize>,
+        /// Use the loose ASCII NPMI floor for non-Japanese Phase-2 pairs.
+        #[arg(long)]
+        phase2_non_ja_loose: bool,
+        /// Override PickyBPE pruning enablement (`0` disables, nonzero enables).
+        #[arg(long)]
+        picky_enabled: Option<u8>,
         /// BEG max NPMI exponent for high-entropy Kanji prefixes (`0` disables).
         #[arg(long)]
         beg_strength: Option<f64>,
@@ -121,9 +148,9 @@ enum Command {
         #[arg(long)]
         threads: Option<usize>,
     },
-    /// Encode text to token ids / pieces.
+    /// Encode text to token ids / pieces using any supported model format.
     Encode {
-        /// Model path (`.ktok` or `.json`).
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         /// Input text file (stdin when `--text` is absent too).
@@ -144,8 +171,9 @@ enum Command {
         #[command(flatten)]
         policy: PolicyArgs,
     },
-    /// Decode comma-separated final token ids.
+    /// Decode comma-separated final token ids using any supported model format.
     Decode {
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         /// e.g. `--ids 104,105,256`.
@@ -154,22 +182,40 @@ enum Command {
         #[command(flatten)]
         policy: PolicyArgs,
     },
-    /// Dump the raw model as JSON (for exporters).
+    /// Dump any supported model format as kototok JSON (kept for compatibility).
     Dump {
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
         output: PathBuf,
     },
-    /// Print the model's UTF-8 audit report.
+    /// Export or convert a model between all supported formats.
+    #[command(visible_alias = "convert")]
+    Export {
+        /// Input model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
+        #[arg(long)]
+        model: PathBuf,
+        /// Output file or directory.
+        #[arg(long)]
+        output: PathBuf,
+        /// Explicit output format (`ktok`, `json`, `hf`, `hf-dir`, `tiktoken`, `bpe`).
+        #[arg(long, value_parser = parse_format)]
+        format: Option<ModelFormat>,
+        #[command(flatten)]
+        policy: PolicyArgs,
+    },
+    /// Print the UTF-8 audit report for any supported model format.
     Inspect {
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
         json: bool,
     },
-    /// Visualize tokenization pieces for a text.
+    /// Visualize tokenization pieces for a text using any supported model format.
     Viz {
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
@@ -180,15 +226,18 @@ enum Command {
     /// Boundary-aligned merge surgery: prune learned merges that cross gold
     /// morphological boundaries (Aligned BPE-Knockout).
     Refine {
-        /// Model path (`.ktok` or `.json`).
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         /// Gold boundary JSONL (`text`, `byte_spans`, `okurigana_words`).
         #[arg(long)]
         gold: PathBuf,
-        /// Output refined `.ktok` path.
+        /// Output refined model path (`.ktok`, `tokenizer.json`, `.tiktoken`, `.json`, or a format directory).
         #[arg(long)]
         output: PathBuf,
+        /// Explicit output format (`ktok`, `json`, `hf`, `hf-dir`, `tiktoken`, `bpe`).
+        #[arg(long, value_parser = parse_format)]
+        format: Option<ModelFormat>,
         /// Minimum boundary violations before pruning a merge.
         #[arg(long, default_value_t = 1)]
         min_violations: usize,
@@ -207,8 +256,9 @@ enum Command {
         #[arg(long)]
         prune_oku_edges: bool,
     },
-    /// Time `encode` throughput on an input file.
+    /// Time `encode` throughput on an input file using any supported model format.
     Bench {
+        /// Model path (`.ktok`, HF `tokenizer.json`/dir, `.tiktoken`, `vocab.json`+`merges.txt` dir, or `.json`).
         #[arg(long)]
         model: PathBuf,
         #[arg(long)]
@@ -230,6 +280,10 @@ fn parse_preset(s: &str) -> Result<TrainPreset, String> {
     TrainPreset::from_str(s)
 }
 
+fn parse_format(s: &str) -> Result<ModelFormat, String> {
+    ModelFormat::from_str(s).map_err(|e| e.to_string())
+}
+
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -249,6 +303,7 @@ fn run() -> Result<(), DynError> {
             input,
             output,
             json_out,
+            format,
             vocab_size,
             preset,
             beta,
@@ -260,6 +315,14 @@ fn run() -> Result<(), DynError> {
             phase2_ascii_quota,
             min_char_freq,
             min_pair_freq,
+            multilingual,
+            attach_space_to_punct,
+            max_atomic_chars,
+            min_segment_freq,
+            phase2_max_seg,
+            phase2_fallback_window,
+            phase2_non_ja_loose,
+            picky_enabled,
             beg_strength,
             beg_stem_max,
             beg_noun_min,
@@ -307,6 +370,30 @@ fn run() -> Result<(), DynError> {
             if let Some(v) = min_pair_freq {
                 cfg.min_pair_freq = v;
             }
+            if multilingual {
+                cfg.pretok.multilingual_scripts = true;
+            }
+            if attach_space_to_punct {
+                cfg.pretok.attach_space_to_punct = true;
+            }
+            if let Some(v) = max_atomic_chars {
+                cfg.max_atomic_chars = Some(v);
+            }
+            if let Some(v) = min_segment_freq {
+                cfg.min_segment_freq = v;
+            }
+            if let Some(v) = phase2_max_seg {
+                cfg.phase2_max_segment_chunks = v;
+            }
+            if let Some(v) = phase2_fallback_window {
+                cfg.phase2_fallback_window = v;
+            }
+            if phase2_non_ja_loose {
+                cfg.phase2_non_ja_loose = true;
+            }
+            if let Some(v) = picky_enabled {
+                cfg.picky_enabled = v != 0;
+            }
             if let Some(v) = beg_strength {
                 cfg.beg_strength = v;
             }
@@ -329,7 +416,11 @@ fn run() -> Result<(), DynError> {
                 cfg.beg_okuri_boost = v;
             }
             let model = train(&corpus, &cfg)?;
-            model.save_binary(&output)?;
+            if let Some(format) = format {
+                model.save_with_format(&output, format)?;
+            } else {
+                model.save_auto(&output)?;
+            }
             if let Some(path) = &json_out {
                 model.save_json(path)?;
             }
@@ -400,13 +491,27 @@ fn run() -> Result<(), DynError> {
             println!("dumped -> {}", output.display());
             Ok(())
         }
+        Command::Export {
+            model,
+            output,
+            format,
+            policy,
+        } => {
+            let model = policy.apply(Model::load_auto(&model)?);
+            let format = format.unwrap_or_else(|| ModelFormat::infer_from_save_path(&output));
+            model.save_with_format(&output, format)?;
+            println!("exported ({format}) -> {}", output.display());
+            Ok(())
+        }
         Command::Inspect { model, json } => {
+            let format = Model::detect_format(&model)?;
             let model = Model::load_auto(&model)?;
             let audit = model.audit_utf8_validity();
             if json {
                 println!("{}", serde_json::to_string_pretty(&audit)?);
             } else {
                 println!("name: {}", model.metadata.name);
+                println!("format: {format}");
                 println!("events: {}", model.events.len());
                 println!("{audit:#?}");
             }
@@ -437,6 +542,7 @@ fn run() -> Result<(), DynError> {
             model,
             gold,
             output,
+            format,
             min_violations,
             min_graft_freq,
             tag,
@@ -444,7 +550,10 @@ fn run() -> Result<(), DynError> {
         } => refine_model(
             &model,
             &gold,
-            &output,
+            RefineOutput {
+                path: &output,
+                format,
+            },
             min_violations,
             min_graft_freq,
             tag,
@@ -532,6 +641,11 @@ fn read_text(input: Option<&Path>, text: Option<String>) -> io::Result<String> {
     Ok(buf)
 }
 
+struct RefineOutput<'a> {
+    path: &'a Path,
+    format: Option<ModelFormat>,
+}
+
 /// Boundary-aligned bidirectional merge surgery (Aligned BPE-Knockout).
 ///
 /// Phase A (prune): attributes every predicted piece that strictly contains
@@ -544,7 +658,7 @@ fn read_text(input: Option<&Path>, text: Option<String>) -> io::Result<String> {
 fn refine_model(
     model_path: &Path,
     gold_path: &Path,
-    out_path: &Path,
+    output: RefineOutput<'_>,
     min_violations: usize,
     min_graft_freq: usize,
     tag: Option<String>,
@@ -842,10 +956,14 @@ fn refine_model(
     model.metadata.name = format!("{}-refined", model.metadata.name);
     model.metadata.train_notes =
         format!("aligned-BKO: {n_pruned} prunes + {n_grafts} grafts via {n_lines} gold sentences");
-    model.save_binary(out_path)?;
+    if let Some(format) = output.format {
+        model.save_with_format(output.path, format)?;
+    } else {
+        model.save_auto(output.path)?;
+    }
     println!(
         "refined: {n_pruned} prunes + {n_grafts} grafts ({n_lines} gold lines) -> {}",
-        out_path.display()
+        output.path.display()
     );
     Ok(())
 }

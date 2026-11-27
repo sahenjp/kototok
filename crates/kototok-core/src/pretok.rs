@@ -5,7 +5,10 @@
 //! byte-for-byte (contiguous `0..text.len()`, char boundaries only).
 
 use crate::model::{PreTokenizerConfig, PreTokenizerMode};
-use crate::script::{ScriptClass, classify_ascii_byte, classify_char};
+use crate::script::{
+    ScriptClass, classify_ascii_byte, classify_char, is_combining_or_joiner, is_latin_letter,
+    is_spaced_multilingual_letter, multilingual_script_group,
+};
 
 /// A pre-tokenizer span over the input text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +49,103 @@ fn is_gpt_letter(cls: ScriptClass) -> bool {
             | ScriptClass::OtherLetter
             | ScriptClass::ProlongedMark
     )
+}
+
+#[inline]
+fn char_at(text: &str, pos: usize) -> char {
+    text[pos..].chars().next().unwrap()
+}
+
+/// Run-state for the multilingual script DFA. Unlike the legacy Japanese DFA,
+/// ASCII and Latin-extended letters share one `Latin` run, while every other
+/// alphabetic script is keyed by `multilingual_script_group`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MultiRunState {
+    Kanji,
+    KanjiHira,
+    Hiragana,
+    Katakana,
+    Latin,
+    Fullwidth,
+    ScriptLetter(u8),
+    OtherSymbol,
+}
+
+#[inline]
+fn multi_run_state_of(cls: ScriptClass, ch: char) -> MultiRunState {
+    match cls {
+        ScriptClass::Kanji => MultiRunState::Kanji,
+        ScriptClass::Hiragana => MultiRunState::Hiragana,
+        ScriptClass::Katakana => MultiRunState::Katakana,
+        ScriptClass::AsciiIdent => MultiRunState::Latin,
+        ScriptClass::FullwidthAlnum => MultiRunState::Fullwidth,
+        ScriptClass::OtherLetter if is_latin_letter(ch) => MultiRunState::Latin,
+        ScriptClass::OtherLetter => MultiRunState::ScriptLetter(multilingual_script_group(ch)),
+        _ => MultiRunState::OtherSymbol,
+    }
+}
+
+#[inline]
+fn multi_run_step(
+    state: MultiRunState,
+    cls: ScriptClass,
+    ch: char,
+    mode: PreTokenizerMode,
+) -> (bool, MultiRunState) {
+    use MultiRunState::*;
+    if is_combining_or_joiner(ch)
+        && matches!(
+            state,
+            Latin | ScriptLetter(_) | Kanji | KanjiHira | Hiragana | Katakana
+        )
+    {
+        return (true, state);
+    }
+    match (state, cls) {
+        (Kanji, ScriptClass::Kanji) => (true, Kanji),
+        (Kanji, ScriptClass::Hiragana) if mode == PreTokenizerMode::AsymScript => (true, KanjiHira),
+        (KanjiHira, ScriptClass::Hiragana) => (true, KanjiHira),
+        (Hiragana, ScriptClass::Hiragana) => (true, Hiragana),
+        (KanjiHira | Hiragana | Katakana, ScriptClass::ProlongedMark) => (true, state),
+        (Katakana, ScriptClass::Katakana) => (true, Katakana),
+        (Latin, ScriptClass::AsciiIdent) => (true, Latin),
+        (Latin, ScriptClass::OtherLetter) if is_latin_letter(ch) => (true, Latin),
+        (ScriptLetter(group), ScriptClass::OtherLetter)
+            if !is_latin_letter(ch) && multilingual_script_group(ch) == group =>
+        {
+            (true, state)
+        }
+        (Fullwidth, ScriptClass::FullwidthAlnum) => (true, Fullwidth),
+        (OtherSymbol, ScriptClass::OtherSymbol) => (true, OtherSymbol),
+        _ => (false, state),
+    }
+}
+
+/// Consumes a multilingual script-mode run starting at `pos`.
+fn consume_multilingual_run(
+    text: &str,
+    pos: usize,
+    cls0: ScriptClass,
+    len0: usize,
+    mode: PreTokenizerMode,
+    max_chars: usize,
+) -> usize {
+    let n = text.len();
+    let mut end = pos + len0;
+    let mut chars_used = 1usize;
+    let mut state = multi_run_state_of(cls0, char_at(text, pos));
+    while end < n && chars_used < max_chars {
+        let (cls, len) = class_at(text, end);
+        let ch = char_at(text, end);
+        let (cont, next) = multi_run_step(state, cls, ch, mode);
+        if !cont {
+            break;
+        }
+        state = next;
+        end += len;
+        chars_used += 1;
+    }
+    end
 }
 
 /// Internal run-state for the AsymScript/StrictScript DFA.
@@ -190,14 +290,22 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                 }
                 let run_is_single_space = j - i == 1 && bytes[i] == b' ';
                 let attaches = run_is_single_space
-                    && cfg.attach_ascii_leading_space
                     && j < n
-                    && matches!(
-                        class_at(text, j).0,
-                        ScriptClass::AsciiIdent
-                            | ScriptClass::AsciiDigit
-                            | ScriptClass::AsciiOperator
-                    );
+                    && ({
+                        let next_cls = class_at(text, j).0;
+                        let ascii_attach = cfg.attach_ascii_leading_space
+                            && matches!(
+                                next_cls,
+                                ScriptClass::AsciiIdent
+                                    | ScriptClass::AsciiDigit
+                                    | ScriptClass::AsciiOperator
+                            );
+                        let multilingual_attach = cfg.multilingual_scripts
+                            && is_spaced_multilingual_letter(char_at(text, j));
+                        let punct_attach =
+                            cfg.attach_space_to_punct && next_cls == ScriptClass::AsciiPunctHard;
+                        ascii_attach || multilingual_attach || punct_attach
+                    });
                 if attaches {
                     attach_from = Some(i);
                     i = j;
@@ -218,14 +326,27 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
             ScriptClass::JaPunct | ScriptClass::ProlongedMark => {
                 // A ー at run-start (or after a non-kana class) behaves like
                 // Japanese punctuation. Punctuation tokens are hard on both
-                // sides: the previous token is sealed too.
+                // sides: the previous token is sealed too. In global
+                // (`attach_space_to_punct`) mode, adjacent `JaPunct` pairs
+                // (`、「`, `。（`, `！！`, `）。`) stay soft with each other
+                // while still strictly sealing every word boundary.
+                let is_ja_punct = cls == ScriptClass::JaPunct;
+                let next_is_ja_punct = is_ja_punct
+                    && cfg.attach_space_to_punct
+                    && i + len < n
+                    && class_at(text, i + len).0 == ScriptClass::JaPunct;
                 if let Some(prev) = out.last_mut() {
-                    prev.hard_break_after = true;
+                    let prev_is_ja_punct = is_ja_punct
+                        && cfg.attach_space_to_punct
+                        && class_at(text, prev.start).0 == ScriptClass::JaPunct;
+                    if !prev_is_ja_punct {
+                        prev.hard_break_after = true;
+                    }
                 }
                 out.push(PreToken {
                     start,
                     end: i + len,
-                    hard_break_after: true,
+                    hard_break_after: !next_is_ja_punct,
                 });
                 i += len;
             }
@@ -235,7 +356,12 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                 // spaces, or words: `():`, `, the`, `(self`, `'t` can form.
                 if let Some(prev) = out.last_mut() {
                     let pb = bytes[prev.end - 1];
-                    if pb.is_ascii_alphanumeric() || pb == b'_' || pb >= 0x80 {
+                    let seals = if cfg.attach_space_to_punct {
+                        pb >= 0x80
+                    } else {
+                        pb.is_ascii_alphanumeric() || pb == b'_' || pb >= 0x80
+                    };
+                    if seals {
                         prev.hard_break_after = true;
                     }
                 }
@@ -282,6 +408,8 @@ pub fn pretokenize_into(text: &str, cfg: &PreTokenizerConfig, out: &mut Vec<PreT
                 let cap = max_chars - head_extra.min(max_chars - 1);
                 let end = if mode == PreTokenizerMode::StandardGpt && is_gpt_letter(cls) {
                     consume_gpt_run(text, i, len, cap)
+                } else if cfg.multilingual_scripts {
+                    consume_multilingual_run(text, i, cls, len, mode, cap)
                 } else {
                     // Non-letter classes that still group (OtherSymbol) and all
                     // script-grouped runs.
@@ -311,6 +439,8 @@ mod tests {
             max_digit_run: 3,
             max_chunk_chars: 128,
             max_segment_chunks: 64,
+            multilingual_scripts: false,
+            attach_space_to_punct: false,
         }
     }
 
@@ -556,6 +686,110 @@ mod tests {
         );
     }
 
+    fn global_cfg() -> PreTokenizerConfig {
+        let mut c = cfg(PreTokenizerMode::AsymScript);
+        c.multilingual_scripts = true;
+        c.attach_space_to_punct = true;
+        c
+    }
+
+    #[test]
+    fn multilingual_latin_runs_include_ascii_and_extended_latin() {
+        let c = global_cfg();
+        let v = spans("über café tiếng x", &c);
+        assert_eq!(
+            v.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            vec!["über", " café", " tiếng", " x"]
+        );
+        assert_coverage("über café tiếng x", &c);
+    }
+
+    #[test]
+    fn multilingual_scripts_and_combining_marks_stay_unbroken() {
+        let c = global_cfg();
+        for text in [
+            "Привет мир",
+            "مرحبا بالعالم",
+            "زبانِ فارسی",
+            "हिन्दी भाषा",
+            "বাংলা ভাষা",
+            "தமிழ் மொழி",
+            "മലയാളം ഭാഷ",
+            "ภาษาไทย",
+            "ភាសាខ្មែর",
+            "한국어 테스트",
+            "ქართული ენა",
+        ] {
+            let v = spans(text, &c);
+            let first = v[0].0;
+            assert!(first.chars().count() > 1, "{text}: {v:?}");
+            assert_coverage(text, &c);
+        }
+        assert_eq!(spans("زبان\u{200C}فارسی", &c)[0].0, "زبان\u{200C}فارسی");
+        assert_eq!(spans("हिन्दी", &c)[0].0, "हिन्दी");
+        assert_eq!(spans("ภาษาไทย", &c)[0].0, "ภาษาไทย");
+    }
+
+    #[test]
+    fn multilingual_different_scripts_split_but_same_script_joins() {
+        let c = global_cfg();
+        assert_eq!(
+            spans("abcαβγdef", &c)
+                .iter()
+                .map(|(t, _)| *t)
+                .collect::<Vec<_>>(),
+            vec!["abc", "αβγ", "def"]
+        );
+        assert_eq!(spans("αβγ", &c)[0].0, "αβγ");
+        assert_eq!(
+            spans("αβγдру", &c)
+                .iter()
+                .map(|(t, _)| *t)
+                .collect::<Vec<_>>(),
+            vec!["αβγ", "дру"]
+        );
+    }
+
+    #[test]
+    fn attach_space_to_punct_keeps_ascii_boundaries_soft() {
+        let c = global_cfg();
+        let v = spans("self.print(x);", &c);
+        assert_eq!(
+            v.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            vec!["self", ".", "print", "(", "x", ")", ";"]
+        );
+        assert!(v.iter().all(|(_, hard)| !hard));
+        let v = spans("if x {", &c);
+        assert_eq!(
+            v.iter().map(|(t, _)| *t).collect::<Vec<_>>(),
+            vec!["if", " x", " {"]
+        );
+        assert_coverage("\\frac{1}{2} + f(x) = y;", &c);
+    }
+
+    #[test]
+    fn attach_space_to_punct_still_seals_before_cjk() {
+        let c = global_cfg();
+        let v = spans("日本。x", &c);
+        assert_eq!(v[0], ("日本", true));
+        assert_eq!(v[1], ("。", true));
+        assert_coverage("日本。x", &c);
+
+        // Adjacent JaPunct pairs stay soft with each other while sealing words.
+        let v2 = spans("日本。「世界」", &c);
+        assert_eq!(
+            v2,
+            vec![
+                ("日本", true),
+                ("。", false),
+                ("「", true),
+                ("世界", true),
+                ("」", true),
+            ]
+        );
+        assert_coverage("日本。「世界」", &c);
+    }
+
     mod proptests {
         use super::*;
         use proptest::prelude::*;
@@ -583,6 +817,21 @@ mod tests {
             #[test]
             fn pretokenize_covers_all_bytes(s in any_string(), mode in any_mode()) {
                 let c = cfg(mode);
+                let pts = pretokenize(&s, &c);
+                let mut expect = 0usize;
+                for pt in &pts {
+                    prop_assert_eq!(pt.start, expect);
+                    prop_assert!(pt.end > pt.start);
+                    expect = pt.end;
+                }
+                prop_assert_eq!(expect, s.len());
+                let joined: String = pts.iter().map(|pt| &s[pt.start..pt.end]).collect();
+                prop_assert_eq!(joined, s);
+            }
+
+            #[test]
+            fn global_pretokenize_covers_multilingual_math_and_code(s in any_string()) {
+                let c = global_cfg();
                 let pts = pretokenize(&s, &c);
                 let mut expect = 0usize;
                 for pt in &pts {

@@ -82,11 +82,12 @@ fn line_blocks(text: &str, max_blocks: usize) -> Vec<&str> {
     blocks
 }
 
-/// Counts pre-token chunks, non-ASCII chars, and (optionally) Phase-2
-/// segments across `text` in parallel.
-pub fn count_corpus(text: &str, cfg: &TrainConfig) -> CorpusCounts {
-    let blocks = line_blocks(text, rayon::current_num_threads().max(1) * 8);
+/// Uses the same line-aligned boundaries for both counting passes.
+pub(crate) fn corpus_blocks(text: &str) -> Vec<&str> {
+    line_blocks(text, rayon::current_num_threads().max(1) * 8)
+}
 
+pub(crate) fn count_phase1(blocks: &[&str], cfg: &TrainConfig) -> CorpusCounts {
     let (chunk_counts, char_counts, k2h_counts) = blocks
         .par_iter()
         .map(|block| {
@@ -98,7 +99,11 @@ pub fn count_corpus(text: &str, cfg: &TrainConfig) -> CorpusCounts {
             pretokenize_into(block, &cfg.pretok, &mut pts);
             for pt in &pts {
                 let b = &block.as_bytes()[pt.start..pt.end];
-                *chunks.entry(Box::from(b)).or_default() += 1;
+                if let Some(count) = chunks.get_mut(b) {
+                    *count += 1;
+                } else {
+                    chunks.insert(Box::from(b), 1);
+                }
                 if beg && let Some((pre, hira)) = k2h_pair(b) {
                     *k2h.entry((Box::from(pre), Box::from(hira))).or_default() += 1;
                 }
@@ -132,59 +137,85 @@ pub fn count_corpus(text: &str, cfg: &TrainConfig) -> CorpusCounts {
             },
         );
 
-    let mut counts = CorpusCounts {
+    CorpusCounts {
         chunk_counts,
         char_counts,
         k2h_counts,
         ..CorpusCounts::default()
-    };
+    }
+}
 
-    if cfg.phase2_enabled && !counts.chunk_counts.is_empty() {
-        let mut table: Vec<Box<[u8]>> = counts.chunk_counts.keys().cloned().collect();
-        table.sort();
-        let id_of: FxHashMap<&[u8], u32> = table
-            .iter()
-            .enumerate()
-            .map(|(i, b)| (b.as_ref(), i as u32))
-            .collect();
-        // Pair statistics only need short co-occurrence windows; capping the
-        // counted segment length keeps `segments` keys small on large corpora.
-        let max_seg = cfg.pretok.max_segment_chunks.clamp(1, 16);
-
-        let segments = blocks
-            .par_iter()
-            .map(|block| {
-                let mut pts = Vec::new();
-                pretokenize_into(block, &cfg.pretok, &mut pts);
-                let mut segs: FxHashMap<Vec<u32>, u64> = FxHashMap::default();
-                let mut cur: Vec<u32> = Vec::new();
-                for pt in &pts {
-                    cur.push(id_of[&block.as_bytes()[pt.start..pt.end]]);
-                    if pt.hard_break_after || cur.len() >= max_seg {
-                        if cur.len() >= 2 {
-                            *segs.entry(std::mem::take(&mut cur)).or_default() += 1;
-                        } else {
-                            cur.clear();
+pub(crate) fn count_segments(
+    blocks: &[&str],
+    cfg: &TrainConfig,
+    table: &[Box<[u8]>],
+) -> FxHashMap<Box<[u32]>, u64> {
+    let id_of: FxHashMap<&[u8], u32> = table
+        .iter()
+        .enumerate()
+        .map(|(i, b)| (b.as_ref(), i as u32))
+        .collect();
+    // Preserve the training window cap independently of the runtime cap.
+    let max_seg = cfg
+        .pretok
+        .max_segment_chunks
+        .min(cfg.phase2_max_segment_chunks)
+        .clamp(1, 16);
+    let mut segments = blocks
+        .par_iter()
+        .map(|block| {
+            let mut segments: FxHashMap<Box<[u32]>, u64> = FxHashMap::default();
+            let mut pts = Vec::new();
+            pretokenize_into(block, &cfg.pretok, &mut pts);
+            let mut cur = Vec::with_capacity(max_seg);
+            for pt in &pts {
+                cur.push(id_of[&block.as_bytes()[pt.start..pt.end]]);
+                if pt.hard_break_after || cur.len() >= max_seg {
+                    if cur.len() >= 2 {
+                        *segments.entry(Box::from(cur.as_slice())).or_default() += 1;
+                    }
+                    cur.clear();
+                }
+            }
+            if cur.len() >= 2 {
+                *segments.entry(Box::from(cur.as_slice())).or_default() += 1;
+            }
+            segments
+        })
+        // The reduction order sets word IDs for contextual candidate updates.
+        .reduce(FxHashMap::default, |mut a, b| {
+            for (k, v) in b {
+                *a.entry(k).or_default() += v;
+            }
+            a
+        });
+    if cfg.min_segment_freq > 1 {
+        if cfg.phase2_fallback_window >= 2 && cfg.phase2_fallback_window < max_seg {
+            let sub_len = cfg.phase2_fallback_window;
+            let mut kept = FxHashMap::default();
+            let mut fallback: FxHashMap<Box<[u32]>, u64> = FxHashMap::default();
+            for (seg, count) in segments {
+                if count >= cfg.min_segment_freq {
+                    kept.insert(seg, count);
+                } else {
+                    for chunk in seg.chunks(sub_len) {
+                        if chunk.len() >= 2 {
+                            *fallback.entry(Box::from(chunk)).or_default() += count;
                         }
                     }
                 }
-                if cur.len() >= 2 {
-                    *segs.entry(cur).or_default() += 1;
+            }
+            for (sub, count) in fallback {
+                if count >= cfg.min_segment_freq {
+                    *kept.entry(sub).or_default() += count;
                 }
-                segs
-            })
-            .reduce(FxHashMap::default, |mut a, b| {
-                for (k, v) in b {
-                    *a.entry(k).or_default() += v;
-                }
-                a
-            });
-
-        counts.chunk_table = table;
-        counts.segments = segments;
+            }
+            segments = kept;
+        } else {
+            segments.retain(|_, count| *count >= cfg.min_segment_freq);
+        }
     }
-
-    counts
+    segments
 }
 
 #[cfg(test)]
@@ -203,21 +234,40 @@ mod tests {
     fn counts_cover_corpus() {
         let c = cfg();
         let text = "新しいRustのトークナイザー。\n".repeat(100);
-        let counts = count_corpus(&text, &c);
+        let blocks = corpus_blocks(&text);
+        let counts = count_phase1(&blocks, &c);
+        let table: Vec<_> = counts.chunk_counts.keys().cloned().collect();
+        let segments = count_segments(&blocks, &c, &table);
         assert!(counts.chunk_counts.values().sum::<u64>() >= 500);
         assert_eq!(counts.char_counts[&'新'], 100);
-        assert!(!counts.segments.is_empty());
-        assert!(counts.segments.keys().all(|s| s.len() >= 2));
-        for seg in counts.segments.keys() {
+        assert!(!segments.is_empty());
+        assert!(segments.keys().all(|s| s.len() >= 2));
+        for seg in segments.keys() {
             for &id in seg {
-                assert!((id as usize) < counts.chunk_table.len());
+                assert!((id as usize) < table.len());
             }
         }
     }
 
     #[test]
     fn empty_corpus_yields_empty_counts() {
-        let counts = count_corpus("", &cfg());
+        let blocks = corpus_blocks("");
+        let counts = count_phase1(&blocks, &cfg());
         assert!(counts.chunk_counts.is_empty() && counts.segments.is_empty());
+        assert!(count_segments(&blocks, &cfg(), &[]).is_empty());
+    }
+
+    #[test]
+    fn segment_frequency_is_filtered_after_combining_blocks() {
+        let cfg = crate::TrainPreset::Global.config(512);
+        let blocks = ["abc def\n", "abc ghi\n", "abc def\n"];
+        let counts = count_phase1(&blocks, &cfg);
+        let table: Vec<_> = counts.chunk_counts.into_keys().collect();
+        let segments = count_segments(&blocks, &cfg, &table);
+        assert_eq!(segments.len(), 1);
+        let (ids, &weight) = segments.iter().next().unwrap();
+        let chunks: Vec<_> = ids.iter().map(|&id| table[id as usize].as_ref()).collect();
+        assert_eq!(chunks, [b"abc".as_slice(), b" def".as_slice(), b"\n"]);
+        assert_eq!(weight, 2);
     }
 }
