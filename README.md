@@ -1,11 +1,15 @@
 # kototok（AsymScript-BPE）
 
-kototok は、日本語・英語・コードが混在する入力向けの Rust 製サブワードトークナイザーであり、辞書不要・学習時の不正 UTF-8 学習トークン 0（UTF-8 原子性不変条件）・最悪 O(N) の完全可逆エンコードを実現します。
+kototok は、日本語・英語・多言語・コード・数式が混在する入力向けの Rust 製サブワードトークナイザーであり、辞書不要・学習時の不正 UTF-8 学習トークン 0（UTF-8 原子性不変条件）・最悪 O(N) の完全可逆エンコードを実現します。
+独自の `.ktok` バイナリに加え、kototok JSON・Hugging Face `tokenizer.json` / ディレクトリ・OpenAI `.tiktoken`・GPT-2 形式（`vocab.json` + `merges.txt`）の全 6 形式を自動で読み込み・書き出しできます。
 形式仕様、不変条件、および計算量証明の詳細は [docs/ALGORITHM.md](docs/ALGORITHM.md) を参照してください。専門知識のない読者向けの解説は [docs/slides/index.html](docs/slides/index.html) にあります。
 
 ## 主な結果
 
 817MB コーパスで学習した 200k モデルでは、非対称前処理と境界エントロピーゲート（BEG）および外科的語彙修復により、高い日本語形態素境界品質と各言語の圧縮効率を両立しています。
+さらに 68 ドメイン向けの `global` プリセット（264k 語彙）では、多言語文字種処理と階層フォールバック Phase-2 により、自然言語・数式・コードの全領域で高い圧縮効率と完全可逆性を達成しています。
+
+- 68 ドメイン多言語・数式・コード評価（11.16MB・完全非重複 held-out）では、フラッグシップの `kototok_global_264k.ktok`（alive vocab 264,498、不正 UTF-8 学習トークン 0）が総トークン数 2,244,421 を記録し、外部 11 モデル（`HF-Global-264k`・`GPT-4o (o200k)`・`Gemma-3`・`Qwen3.5`・`Gemma-2`・`DeepSeek-V3`・`Inkling-2`・`Qwen3`・`Qwen2.5`・`Llama-3`・`GPT-4 (cl100k)`）すべてに対して全 68 ドメインで勝利しました（延べ 748/748 勝、全 11 モデルのドメイン別最良値を集めた仮想アンサンブルに対しても 68/68 全勝）。同一 286MB コーパス条件の対照モデル `kototok-Global-Same` でも総トークン数 2,234,457 となり、`HF-Global-264k`（2,712,790）比で 17.6% 少ないトークン数に抑えています。
 
 - コード向け前処理拡張版の 200k モデル `kototok 200k (s3h)` は、JA 圧縮（held-out 2.179 chars/token）、EN 圧縮（4.356 chars/token）、Code 圧縮（5.380 bytes/token）、Mixed 圧縮（4.913 bytes/token）、150 文 hand-gold の形態素境界 F1（0.9361）、送り仮名保持率（91.43%）、名詞+助詞 過結合率（0.25%）、エンコード速度（~65 MB/s）の 8 軸で、同一テストセット上で実測した外部モデルの各指標最良値を上回りました（JA 圧縮の参照点である Sarashina3 公開値は別テストセットの目標値として扱います）。
 - kototok v2-T（kototok_v2s_200k.ktok）は単一ファイル内にタグ付き層を内蔵し、okuedge 層を含めた strict プロファイルで Sudachi gold 500 文 holdout の境界 F1 0.864・送り仮名保持 88.9%・過結合 0.4% を達成します（独立辞書 UniDic でも境界 F1 0.852・送り仮名 89.0%・過結合 0.5%）。
@@ -52,6 +56,20 @@ Selectable-Segmentation（v2-T、`kototok_v2s_200k.ktok`）は、`.ktok` の語�
 
 多言語対応モデルの `kototok_v2_bko3_200k.ktok`（41.6MB）は、KO/ZH Wikipedia と口語文を学習コーパスへ混入した v2 モデル（776MB、vocab 200k）に対し、JA/口語は Sudachi gold、KO/ZH は whitespace・jieba 由来の gold を用いた Aligned BPE-Knockout（1,328 prune + 64,498 graft。モデル内メタデータ記録では gold 17,536 文に適用）を実施して構築しています。
 KO/ZH の学習時混入だけでは未見文の圧縮が 2.88 / 3.49 B/T にとどまるのに対し、gold 境界からの事後 graft によって 3.75 / 4.01 B/T まで伸びており、Aligned BPE-Knockout は gold さえあれば任意言語の語彙を後付けで増設できる機構として機能します。
+
+### 多言語 global プリセットと階層フォールバック Phase-2
+
+68 ドメイン向けの `global` プリセットでは、日本語特化の前処理に加えて多言語文字種処理と省メモリ Phase-2 学習を組み合わせています。
+
+- 多言語文字種 DFA（`multilingual_scripts`）は、Unicode の結合記号・ゼロ幅接合子（インド系・東南アジア系・アラビア系・ヘブライ系等）や拡張ラテン文字（アゼルバイジャン語の `ə` 等）・ギリシャ文字（`µ` 含む）を文字種ごとにまとめて分断を防ぎ、非 CJK の全アルファベット文字種（節区切り空白を含むタイ語・ラーオ語・ミャンマー語・クメール語等を含む）で単一の先頭 ASCII 空白を後続語へ結合します。
+- コード・数式・多言語向けの句読点処理（`attach_space_to_punct`）は、ASCII 句読点の前後を Phase-2 のソフト境界に保ちつつ、日本語では単語と句読点の境界を封印したまま隣接する日本語約物同士（`。「` や `！！` 等）のみ結合可能にします。
+- 階層フォールバック Phase-2（`phase2_fallback_window = 3`）は、16 チャンク窓で 2 回以上出現するコード行や数式をそのまま保持する一方、1 回しか現れない自然言語文を捨てずに 3 チャンク単位へ分割して反復句を集計します。あわせて Phase-1 と Phase-2 の状態寿命分離、インプレースのシンボル列更新、Phase-2 低頻度ペアの事前除外により、286MB・264k 語彙の学習を 4 スレッド約 36〜50 秒、ピーク RSS 1.86 GiB（スワップ 0 KiB）で完了できます。
+
+### 汎用フォーマット入出力と相互運用
+
+kototok は `.ktok` バイナリのほか、kototok JSON（`json`）、Hugging Face `tokenizer.json`（`hf`）、Hugging Face ディレクトリ（`hf-dir`、`tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json`）、OpenAI `.tiktoken`（`tiktoken`）、GPT-2 形式（`bpe`、`vocab.json` + `merges.txt`）の全 6 形式に対応します。
+読み込み時はファイル内容またはディレクトリ構成から形式を自動判定し、書き出し時は出力パスから形式を推定します（`--format` で明示指定も可能）。
+Hugging Face 形式への書き出しでは PickyBPE の剪定済み祖先を補完して密な語彙 ID（`0..V-1`）を出力し、`pre_tokenizer` 設定には `AsymScript`・`StrictScript`・`StandardGpt` と `global` 拡張フラグを反映するため、Hugging Face `tokenizers` ランタイムおよび kototok 再読込の両方で動作を再現できます。
 
 ## 評価
 
@@ -152,6 +170,33 @@ EN 圧縮でも `asym-full`（200k）は `tiktoken` o200k（3.9569）および c
 
 なお、この表は `okuedge` 層導入前の時点での比較であり、`okuedge` 層を含めた `kototok_v2s_200k.ktok` のプロファイル比較（`strict` 0.864 / 88.9% / 0.4% と `balanced` 0.865 / 86.0% / 1.4%）は次節の境界評価に掲載します。
 
+#### 68 ドメイン多言語・数式・コード横断評価（264k）
+
+公開データセット（`FineWeb-Edu` 英語、`FineWeb-2` 57 言語、`FineMath-4plus` 数式、`the-stack-smol-xl` 9 プログラミング言語）から学習用と完全に非重複の held-out 評価セット（計 68 ドメイン・11.16MB）を構築し、総トークン数（少ないほど高圧縮）を比較しました。
+同一 286MB コーパスで学習した対照モデル `kototok-Global-Same` と `HF-Global-264k`、主要言語の配分を整えた完全非重複 780.5MB コーパスで学習した `kototok_global_264k.ktok`、および公開外部トークナイザー 10 モデル（計 11 外部モデル）の結果を示します（詳細 JSON は [eval/global_68/bench_final.json](eval/global_68/bench_final.json) と [eval/global_68/bench_same.json](eval/global_68/bench_same.json) に格納）。
+
+| モデル | 語彙数 | Language (58言語) | Math | Code (9言語) | GrandTotal | `kototok-Global-264k` の勝数 |
+| --- | ---: | ---: | ---: | ---: | ---: | --- |
+| **kototok-Global-264k (`.ktok`)** | **264,498** | **1,649,905** | 187,040 | 407,476 | **2,244,421** | 全 11 外部モデルに **748/748**（仮想最良比 **68/68**） |
+| **kototok-Global-Same（同一286MB）** | 264,498 | 1,678,138 | **174,634** | **381,685** | 2,234,457 | 同一条件対照（HF 比 -17.6%） |
+| **kototok-Global-264k-HF（HF書出）** | 267,695 | 1,650,267 | 188,592 | 414,960 | 2,253,819 | 全 11 外部モデルに 745/748（8 モデルに 68/68） |
+| HF-Global-264k（同一286MB） | 264,498 | 1,915,986 | 235,507 | 561,297 | 2,712,790 | **68/68**（GrandTotal -17.3%） |
+| GPT-4o (`o200k_base`) | 200,019 | 2,019,663 | 233,938 | 468,617 | 2,722,218 | **68/68**（GrandTotal -17.6%） |
+| Gemma-3 (`gemma-3-1b-it`) | 262,145 | 1,952,061 | 252,891 | 564,176 | 2,769,128 | **68/68**（GrandTotal -18.9%） |
+| Qwen3.5 (`Qwen3.5-0.8B`) | 248,070 | 2,056,155 | 253,266 | 512,632 | 2,822,053 | **68/68**（GrandTotal -20.5%） |
+| Gemma-2 (`gemma-2`) | 256,000 | 2,090,868 | 250,432 | 562,829 | 2,904,129 | **68/68**（GrandTotal -22.7%） |
+| DeepSeek-V3 | 128,815 | 2,340,419 | 231,462 | 503,145 | 3,075,026 | **68/68**（GrandTotal -27.0%） |
+| Inkling-2 | 200,058 | 2,207,167 | 253,578 | 641,070 | 3,101,815 | **68/68**（GrandTotal -27.6%） |
+| Qwen3 (`Qwen3-0.6B`) | 151,669 | 2,656,851 | 248,559 | 475,861 | 3,381,271 | **68/68**（GrandTotal -33.6%） |
+| Qwen2.5 | 151,665 | 2,656,851 | 248,559 | 475,861 | 3,381,271 | **68/68**（GrandTotal -33.6%） |
+| Llama-3 | 128,256 | 2,752,807 | 235,135 | 464,207 | 3,452,149 | **68/68**（GrandTotal -35.0%） |
+| GPT-4 (`cl100k_base`) | 100,277 | 3,272,560 | 235,843 | 464,423 | 3,972,826 | **68/68**（GrandTotal -43.5%） |
+
+- 同一 286MB コーパス条件の比較では、`kototok-Global-Same` が `HF-Global-264k` に対し GrandTotal で -17.6%（478,333 トークン削減）を達成しています。標準 ByteLevel BPE である `HF-Global-264k` は結合記号の分断によりインド系・東南アジア系言語でトークン数が増えるのに対し、kototok の多言語 DFA と階層フォールバック Phase-2 は言語・数式・コードの 3 領域すべてを同時に圧縮します。
+- バランス配分コーパス（780.5MB）で学習した `kototok_global_264k.ktok` は、JA `119,499`（HF `121,978`・o200k `187,516`）、ZH `160,988`（Qwen3.5 `162,710`・HF `167,894`）、KO `86,072`（HF `89,787`・o200k `119,100`）、EN `205,929`（o200k `226,070`・HF `232,744`）、Math `187,040`（DeepSeek-V3 `231,462`・o200k `233,938`）、Python `69,131`（Llama-3 `75,503`・o200k `76,049`）、ベンガル語 `9,226`（Gemma-3 `9,575`）、タイ語 `11,257`（Qwen3.5 `11,361`）を記録し、全 11 外部モデルに対して延べ 748/748 勝（各ドメインの外部最良値に対しても 68/68 全勝）を達成しています。
+- Hugging Face 形式へ書き出した `kototok-Global-264k-HF` は、UTF-8 原子文字の中間バイト列を ByteLevel BPE 語彙として補完するため語彙数が 267,695（+3,197）になりますが、Language 合計は `.ktok` と 0.022% 差（362 トークン差）で一致し、全 68 ドメイン 11.16MB で完全可逆です（外部 11 モデル中 8 モデルに 68/68、`Code-JavaScript` のみ長大な `*` バナー行の分割差で `o200k`・`cl100k`・`Llama-3` に僅差で譲る延べ 745/748 勝）。
+- `kototok_global_264k.ktok` のエンコード速度は `eval/global_68/eval/jpn_Jpan.txt`（702KB）で 1 スレッド 51.11 MB/s（8.70M tokens/s）、8 スレッド 146.38 MB/s（24.92M tokens/s）です。
+
 ### 形態素境界と送り仮名保持
 
 まず、150 行の hand gold セットで計測した境界品質（`kototok s3h` および外部 10 モデル）を示します。
@@ -232,16 +277,29 @@ kototok は上位 7 枠中 5 枠を占めてすべての汎用多言語トーク
 
 ## 配布モデル
 
-学習済みモデル 2 種を `models/` に同梱しています（`.ktok` バイナリ、クローン後そのまま `kototok encode/decode/inspect` や `Tokenizer.load` で利用可能）。
+学習済みモデル 6 種（`.ktok` バイナリ）と、Rust のビルドなしでそのまま読み込めるフラッグシップの Hugging Face 形式ディレクトリ（`models/kototok_global_264k_hf/`）を `models/` に同梱しています。
+`kototok` CLI・Python バインディングは `.ktok` / `json` / `hf` / `hf-dir` / `tiktoken` / `bpe` の全 6 形式を自動で読み書きでき、他のモデルも `kototok export` で任意の形式へ変換できます。
+
+```python
+# Rust ビルド不要（Hugging Face tokenizers / transformers でそのまま利用可能）
+from tokenizers import Tokenizer
+tok = Tokenizer.from_file("models/kototok_global_264k_hf/tokenizer.json")
+# または transformers: AutoTokenizer.from_pretrained("models/kototok_global_264k_hf")
+```
 
 | ファイル | サイズ | 内容 |
 | --- | ---: | --- |
+| `models/kototok_global_264k_hf/` | 14.6MB | `kototok_global_264k` の Hugging Face 形式ディレクトリ（`tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json`、語彙 267,695）。`transformers`・`tokenizers`・vLLM 等からビルド不要で直接読込可能（68 ドメイン完全可逆、外部 11 モデルに 745/748 勝） |
+| `models/kototok_global_264k.ktok` | 39.8MB | 68 ドメイン（58 言語＋数式＋コード 9 言語、780.5MB バランスコーパス）で `--preset global` 学習した多言語フラッグシップモデル。alive vocab 264,498、`invalid_utf8_learned_tokens = 0`、68 ドメイン評価で外部 11 モデルに 748/748（仮想最良比 68/68）全勝 |
 | `models/kototok_v2s_200k.ktok` | 44.7MB | v2 ベース（776MB コーパス・vocab 200k）に複数 refine を適用したポリシー切替モデル。`tag_ranges`（ja/casual/kozh/okuri/okuedge）+ `tagged_prunes`（okuedge 3,482 件）を内蔵し、alive vocab 281,630。`--mode strict`（既定）/ `--tags ja,casual,kozh,okuri`（balanced）を切替可能 |
 | `models/kototok_v2_bko3_200k.ktok` | 41.6MB | 同 v2 ベースに JA/口語の Sudachi gold と KO/ZH の whitespace・jieba gold で Aligned BPE-Knockout（1,328 prune + 64,498 graft、モデル内メタデータ記録の適用 gold は 17,536 文）を施した多言語モデル。alive vocab 264,498 |
+| `models/kototok_s3o_bko2_200k.ktok` | 34.2MB | s3 系ベース（817MB コーパス・vocab 200k）に外科的 BKO2 を適用したモデル（Sudachi holdout 送り仮名保持 94.1%、trigram-LM 1.437 bits/byte） |
+| `models/kototok_s3o_bko3_200k.ktok` | 34.2MB | 同 s3 系ベースに外科的 BKO3 を適用したモデル（trigram-LM 1.437 bits/byte） |
+| `models/kototok_s3n_bko5_200k.ktok` | 38.0MB | 同 s3 系ベースに外科的 BKO5 を適用したモデル（JA prose 5.77 bytes/token、trigram-LM 1.443 bits/byte） |
 
-なお両モデルとも、学習時の UTF-8 原子性によりベースモデルの不正 UTF-8 学習トークンは 0 ですが、事後修復の graft 層が文字境界をまたぐバイト断片を中間ピースとして追加するため、`inspect` 上の `invalid_utf8_learned_tokens` は v2-T が 1,004 件（0.36%）、v2-BKO3 が 1,069 件（0.40%）となります。これらはエンコード時にそのまま出力され得る語彙内断片であり、decode はバイト列連接で復元するため完全可逆性には影響しません（配布モデルでも往復は完全に一致することを確認済み）。
+なお `kototok_global_264k.ktok` は事後 graft を施していないため `invalid_utf8_learned_tokens = 0` です。v2-T と v2-BKO3 は学習時の UTF-8 原子性によりベースモデルの不正 UTF-8 学習トークンは 0 ですが、事後修復の graft 層が文字境界をまたぐバイト断片を中間ピースとして追加するため、`inspect` 上の `invalid_utf8_learned_tokens` は v2-T が 1,004 件（0.36%）、v2-BKO3 が 1,069 件（0.40%）となります。これらはエンコード時にそのまま出力され得る語彙内断片であり、decode はバイト列連接で復元するため完全可逆性には影響しません（全配布モデルで往復が完全に一致することを確認済み）。
 
-出所: いずれも本リポジトリの `kototok train`（`asym-full` ベースの v2 レシピ）で学習後、`kototok refine` で gold 境界修復を適用したものです。学習コーパスは ja.wikipedia（CC BY-SA）・enwiki・青空文庫・OSS コード、境界修復の gold は Sudachi / UniDic 系の分割に由来します。
+出所: `kototok_global_264k.ktok` は本リポジトリの `kototok train --preset global` で学習したもので、学習コーパスは Hugging Face 上の公開データセット（FineWeb-Edu・FineWeb-2・FineMath-4plus・the-stack-smol-xl）と ja.wikipedia に由来します。v2 系・s3 系はいずれも本リポジトリの `kototok train`（`asym-full` ベース）で学習後、`kototok refine` で gold 境界修復を適用したものであり、学習コーパスは ja.wikipedia（CC BY-SA）・enwiki・青空文庫・OSS コード、境界修復の gold は Sudachi / UniDic 系の分割に由来します。
 ライセンス: モデルファイル自体は本リポジトリと同一の MIT OR Apache-2.0 デュアルライセンスです。学習データ由来の制約（jawiki の CC BY-SA 等）は利用目的に応じて利用者側で確認してください。
 
 整合性チェックは同梱の `models/SHA256SUMS.txt` で検証できます。
@@ -256,21 +314,29 @@ sha256sum -c models/SHA256SUMS.txt
 
 | クレート | 役割 |
 | --- | --- |
-| `crates/kototok-core` | DFA 前処理・エンコード/デコード・モデル定義（33 テスト） |
-| `crates/kototok-train` | Rayon 並列トレーナー（Phase-1 BPE + Phase-2 チャンク結合） |
-| `crates/kototok-cli` | `kototok` バイナリ（`train` / `encode` / `decode` / `inspect` / `viz` / `bench`） |
-| `crates/kototok-py` | PyO3 バインディング（`import kototok` で encode/decode/train） |
+| `crates/kototok-core` | DFA 前処理・エンコード/デコード・6 形式入出力・モデル定義（60 テスト） |
+| `crates/kototok-train` | Rayon 並列トレーナー（Phase-1 BPE + 階層フォールバック Phase-2、20 テスト） |
+| `crates/kototok-cli` | `kototok` バイナリ（`train` / `encode` / `decode` / `export` / `convert` / `inspect` / `viz` / `refine` / `bench`） |
+| `crates/kototok-py` | PyO3 バインディング（`import kototok` で全 6 形式の load/save/encode/decode/train） |
 
 ```bash
 cargo build --release          # バイナリ: target/release/kototok
-cargo test --workspace         # 全テスト（50 件・6 スイート）
-cargo clippy --workspace       # 警告ゼロ
+cargo test --workspace         # 全テスト（83 件・7 スイート）
+cargo clippy --workspace --all-targets -- -D warnings
 
-# 学習 → 検査 → エンコード
+# 学習 → 検査 → エンコード（出力ファイル名や --format で 6 形式を直接読み書き）
 kototok train  --input corpus.txt --output model.ktok --vocab-size 4096 --preset asym-full
+kototok train  --input corpus.txt --output tokenizer.json --vocab-size 4096 --preset global
 kototok inspect --model model.ktok --json
 echo "日本語のテキスト" | kototok encode --model model.ktok --input /dev/stdin --json
 kototok bench  --model model.ktok --input corpus.txt --threads 1 --iters 5 --json
+
+# 汎用フォーマット変換（ktok / json / hf / hf-dir / tiktoken / bpe）
+kototok export --model models/kototok_global_264k.ktok --output tokenizer.json
+kototok export --model models/kototok_global_264k.ktok --output hf_out --format hf-dir
+kototok export --model models/kototok_global_264k.ktok --output global.tiktoken
+kototok export --model models/kototok_global_264k.ktok --output bpe_out --format bpe
+kototok encode --model tokenizer.json --text "新しいトークナイザー" --pieces
 ```
 
 語彙サイズ 200,000（817MB コーパス）での学習レシピは次のとおりです。
@@ -315,10 +381,15 @@ cp target/release/libkototok.so pylib/kototok.so   # sys.path 上に置く
 import kototok
 
 tok = kototok.train("corpus.txt", output="model.ktok", vocab_size=4096, preset="asym-full")
-# または tok = kototok.Tokenizer.load("model.ktok")
+# .ktok / tokenizer.json / hf-dir / .tiktoken / bpe-dir / .json を自動判定して読込可能
+tok = kototok.Tokenizer.load("models/kototok_global_264k.ktok")
+print(kototok.detect_format("models/kototok_global_264k.ktok"), kototok.formats())
+tok.save("tokenizer.json")          # 拡張子・ファイル名から自動推定（format="hf-dir" 等で明示も可）
+tok.save_tiktoken("global.tiktoken")
+
 ids    = tok.encode("新しいトークナイザーの設計を調べる。")
 pieces = tok.pieces("新しいトークナイザーの設計を調べる。")
-text   = tok.decode(ids)          # 完全可逆ラウンドトリップ
+text   = tok.decode(ids)            # 完全可逆ラウンドトリップ
 batch  = tok.encode_batch(["東京で会議が始まる。", "hello world"])
 ```
 
@@ -346,6 +417,25 @@ python make_chart.py artifacts_real
 ```
 
 500 文 holdout の境界指標と下流代理指標は、`pylib/kototok.so` と `eval` 依存パッケージを用意したうえで、`eval/gold_unidic.py`（UniDic gold 生成）、`eval/boundary_holdout.py`（Sudachi/UniDic 境界評価）、および `eval/downstream_trigram.py`（64MiB jawiki 学習・363KiB held-out 評価の trigram-LM 交差エントロピー計測）で再現できます。
+
+68 ドメイン多言語・数式・コード評価および `kototok_global_264k.ktok` の学習は次の手順で再現できます。
+
+```bash
+# 68 ドメインの非重複評価セット（11.16MB）と学習コーパスを構築
+eval/.venv/bin/python eval/global_corpus_builder.py --workers 8            # 286MB 同一コーパス対照用
+eval/.venv/bin/python eval/global_corpus_builder.py --balanced --workers 8 # 780.5MB バランス学習用
+
+# フラッグシップ学習（--preset global、vocab 264,498）
+./target/release/kototok train --preset global --vocab-size 264498 --threads 4 \
+  --input eval/global_68/train_global_68_balanced.txt --output models/kototok_global_264k.ktok
+
+# 全 68 ドメイン比較ベンチマーク
+eval/.venv/bin/python eval/global_bench.py \
+  --model "GPT-4o (o200k)=tiktoken:o200k_base" \
+  --model "GPT-4 (cl100k)=tiktoken:cl100k_base" \
+  --model "HF-Global-264k=hf:eval/global_68/hf_global_264k.json" \
+  --model "kototok-Global-264k=ktok:models/kototok_global_264k.ktok"
+```
 
 ## 制約と今後の課題
 
