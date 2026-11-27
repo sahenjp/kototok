@@ -9,7 +9,7 @@ kototok は、日本語・英語・多言語・コード・数式が混在する
 817MB コーパスで学習した 200k モデルでは、非対称前処理と境界エントロピーゲート（BEG）および外科的語彙修復により、高い日本語形態素境界品質と各言語の圧縮効率を両立しています。
 さらに 68 ドメイン向けの `global` プリセット（264k 語彙）では、多言語文字種処理と階層フォールバック Phase-2 により、自然言語・数式・コードの全領域で高い圧縮効率と完全可逆性を達成しています。
 
-- 68 ドメイン多言語・数式・コード評価（11.16MB・完全非重複 held-out）では、フラッグシップの `kototok_global_264k.ktok`（alive vocab 264,498、不正 UTF-8 学習トークン 0）が総トークン数 2,244,421 を記録し、外部 11 モデル（`HF-Global-264k`・`GPT-4o (o200k)`・`Gemma-3`・`Qwen3.5`・`Gemma-2`・`DeepSeek-V3`・`Inkling-2`・`Qwen3`・`Qwen2.5`・`Llama-3`・`GPT-4 (cl100k)`）すべてに対して全 68 ドメインで勝利しました（延べ 748/748 勝、全 11 モデルのドメイン別最良値を集めた仮想アンサンブルに対しても 68/68 全勝）。同一 286MB コーパス条件の対照モデル `kototok-Global-Same` でも総トークン数 2,234,457 となり、`HF-Global-264k`（2,712,790）比で 17.6% 少ないトークン数に抑えています。
+- 68 ドメイン多言語・数式・コード評価（11.16MB・完全非重複 held-out）では、フラッグシップの `kototok_global_264k.ktok`（alive vocab 264,498、不正 UTF-8 学習トークン 0）が総トークン数 2,241,653（4.976 bytes/token）を記録し、外部 12 モデル（`Custom Global 264,498`・`HF-Global-264k`・`GPT-4o (o200k)`・`Gemma-3`・`Qwen3.5`・`Gemma-2`・`DeepSeek-V3`・`Inkling-2`・`Qwen3`・`Qwen2.5`・`Llama-3`・`GPT-4 (cl100k)`）すべてに対して全 68 ドメインで勝利しました（延べ 816/816 勝、全 12 モデルのドメイン別最良値を集めた仮想アンサンブルに対しても 68/68 全勝）。`Custom Global 264,498`（2,671,022）に対しては -16.1% 少ないトークン数・4.38 倍のエンコード速度（14.19 MB/s vs 3.24 MB/s）となり、同一 286MB コーパス条件の対照モデル `kototok-Global-Same`（2,234,457）でも `HF-Global-264k`（2,712,790）比で 17.6% 少ないトークン数に抑えています。
 
 - コード向け前処理拡張版の 200k モデル `kototok 200k (s3h)` は、JA 圧縮（held-out 2.179 chars/token）、EN 圧縮（4.356 chars/token）、Code 圧縮（5.380 bytes/token）、Mixed 圧縮（4.913 bytes/token）、150 文 hand-gold の形態素境界 F1（0.9361）、送り仮名保持率（91.43%）、名詞+助詞 過結合率（0.25%）、エンコード速度（~65 MB/s）の 8 軸で、同一テストセット上で実測した外部モデルの各指標最良値を上回りました（JA 圧縮の参照点である Sarashina3 公開値は別テストセットの目標値として扱います）。
 - kototok v2-T（kototok_v2s_200k.ktok）は単一ファイル内にタグ付き層を内蔵し、okuedge 層を含めた strict プロファイルで Sudachi gold 500 文 holdout の境界 F1 0.864・送り仮名保持 88.9%・過結合 0.4% を達成します（独立辞書 UniDic でも境界 F1 0.852・送り仮名 89.0%・過結合 0.5%）。
@@ -95,7 +95,7 @@ KO/ZH の学習時混入だけでは未見文の圧縮が 2.88 / 3.49 B/T にと
 
 - 多言語文字種 DFA（`multilingual_scripts`）は、Unicode の結合記号・ゼロ幅接合子（インド系・東南アジア系・アラビア系・ヘブライ系等）や拡張ラテン文字（アゼルバイジャン語の `ə` 等）・ギリシャ文字（`µ` 含む）を文字種ごとにまとめて分断を防ぎ、非 CJK の全アルファベット文字種（節区切り空白を含むタイ語・ラーオ語・ミャンマー語・クメール語等を含む）で単一の先頭 ASCII 空白を後続語へ結合します。
 - コード・数式・多言語向けの句読点処理（`attach_space_to_punct`）は、ASCII 句読点の前後を Phase-2 のソフト境界に保ちつつ、日本語では単語と句読点の境界を封印したまま隣接する日本語約物同士（`。「` や `！！` 等）のみ結合可能にします。
-- 階層フォールバック Phase-2（`phase2_fallback_window = 3`）は、16 チャンク窓で 2 回以上出現するコード行や数式をそのまま保持する一方、1 回しか現れない自然言語文を捨てずに 3 チャンク単位へ分割して反復句を集計します。あわせて Phase-1 と Phase-2 の状態寿命分離、インプレースのシンボル列更新、Phase-2 低頻度ペアの事前除外により、264k 語彙の学習を 4 スレッドで 286MB 約 36〜50 秒（ピーク RSS 1.86 GiB・スワップ 0 KiB）、780.5MB コーパスでも 93.7 秒で完了できます。
+- 階層フォールバック Phase-2（`phase2_fallback_window = 3`）は、16 チャンク窓で 2 回以上出現するコード行や数式をそのまま保持する一方、1 回しか現れない自然言語文を捨てずに 3 チャンク単位へ分割して反復句を集計します。あわせて Phase-1 と Phase-2 の状態寿命分離、インプレースのシンボル列更新、Phase-2 低頻度ペアの事前除外により、264k 語彙の学習を 4 スレッドで 286MB 約 36〜50 秒（ピーク RSS 1.86 GiB・スワップ 0 KiB）、799.1MB コーパスでも 105.0 秒で完了できます。
 
 ### 汎用フォーマット入出力と相互運用
 
@@ -215,29 +215,30 @@ EN 圧縮でも `asym-full`（200k）は `tiktoken` o200k（3.9569）および c
 #### 68 ドメイン多言語・数式・コード横断評価（264k）
 
 公開データセット（`FineWeb-Edu` 英語、`FineWeb-2` 57 言語、`FineMath-4plus` 数式、`the-stack-smol-xl` 9 プログラミング言語）から学習用と完全に非重複の held-out 評価セット（計 68 ドメイン・11.16MB）を構築し、総トークン数（少ないほど高圧縮）を比較しました。
-同一 286MB コーパスで学習した対照モデル `kototok-Global-Same` と `HF-Global-264k`、主要言語の配分を整えた完全非重複 780.5MB コーパスで学習した `kototok_global_264k.ktok`、および公開外部トークナイザー 10 モデル（計 11 外部モデル）の結果を示します（詳細 JSON は [eval/global_68/bench_final.json](eval/global_68/bench_final.json) と [eval/global_68/bench_same.json](eval/global_68/bench_same.json) に格納）。
+同一 286MB コーパスで学習した対照モデル `kototok-Global-Same` と `HF-Global-264k`、主要言語の配分を整えた完全非重複 799.1MB コーパスで学習した `kototok_global_264k.ktok`、および公開外部トークナイザー 11 モデル（`Custom Global 264,498` を含む計 12 外部モデル）の結果を示します（詳細 JSON は [eval/global_68/bench_final.json](eval/global_68/bench_final.json) と [eval/global_68/bench_same.json](eval/global_68/bench_same.json) に格納）。
 
 | モデル | 語彙数 | Language (58言語) | Math | Code (9言語) | GrandTotal | `kototok-Global-264k` の勝数 |
 | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| **kototok-Global-264k (`.ktok`)** | **264,498** | **1,649,905** | 187,040 | 407,476 | **2,244,421** | 全 11 外部モデルに **748/748**（仮想最良比 **68/68**） |
+| **kototok-Global-264k (`.ktok`)** | **264,498** | **1,646,124** | 187,367 | 408,162 | **2,241,653** | 全 12 外部モデルに **816/816**（仮想最良比 **68/68**） |
 | **kototok-Global-Same（同一286MB）** | 264,498 | 1,678,138 | **174,634** | **381,685** | 2,234,457 | 同一条件対照（HF 比 -17.6%） |
-| **kototok-Global-264k-HF（HF書出）** | 267,695 | 1,650,267 | 188,592 | 414,960 | 2,253,819 | 全 11 外部モデルに 745/748（8 モデルに 68/68） |
-| HF-Global-264k（同一286MB） | 264,498 | 1,915,986 | 235,507 | 561,297 | 2,712,790 | **68/68**（GrandTotal -17.3%） |
-| GPT-4o (`o200k_base`) | 200,019 | 2,019,663 | 233,938 | 468,617 | 2,722,218 | **68/68**（GrandTotal -17.6%） |
-| Gemma-3 (`gemma-3-1b-it`) | 262,145 | 1,952,061 | 252,891 | 564,176 | 2,769,128 | **68/68**（GrandTotal -18.9%） |
-| Qwen3.5 (`Qwen3.5-0.8B`) | 248,070 | 2,056,155 | 253,266 | 512,632 | 2,822,053 | **68/68**（GrandTotal -20.5%） |
-| Gemma-2 (`gemma-2`) | 256,000 | 2,090,868 | 250,432 | 562,829 | 2,904,129 | **68/68**（GrandTotal -22.7%） |
-| DeepSeek-V3 | 128,815 | 2,340,419 | 231,462 | 503,145 | 3,075,026 | **68/68**（GrandTotal -27.0%） |
-| Inkling-2 | 200,058 | 2,207,167 | 253,578 | 641,070 | 3,101,815 | **68/68**（GrandTotal -27.6%） |
-| Qwen3 (`Qwen3-0.6B`) | 151,669 | 2,656,851 | 248,559 | 475,861 | 3,381,271 | **68/68**（GrandTotal -33.6%） |
-| Qwen2.5 | 151,665 | 2,656,851 | 248,559 | 475,861 | 3,381,271 | **68/68**（GrandTotal -33.6%） |
-| Llama-3 | 128,256 | 2,752,807 | 235,135 | 464,207 | 3,452,149 | **68/68**（GrandTotal -35.0%） |
-| GPT-4 (`cl100k_base`) | 100,277 | 3,272,560 | 235,843 | 464,423 | 3,972,826 | **68/68**（GrandTotal -43.5%） |
+| **kototok-Global-264k-HF（HF書出）** | 267,691 | 1,646,522 | 188,936 | 415,662 | 2,251,120 | 全 12 外部モデルに 813/816（9 モデルに 68/68） |
+| Custom Global 264,498 (`SummerAI-O`) | 264,498 | 1,904,877 | 235,700 | 530,445 | 2,671,022 | **68/68**（GrandTotal -16.1%、速度 4.38x） |
+| HF-Global-264k（同一286MB） | 264,498 | 1,915,986 | 235,507 | 561,297 | 2,712,790 | **68/68**（GrandTotal -17.4%） |
+| GPT-4o (`o200k_base`) | 200,019 | 2,019,663 | 233,938 | 468,617 | 2,722,218 | **68/68**（GrandTotal -17.7%） |
+| Gemma-3 (`gemma-3-1b-it`) | 262,145 | 1,952,061 | 252,891 | 564,176 | 2,769,128 | **68/68**（GrandTotal -19.0%） |
+| Qwen3.5 (`Qwen3.5-0.8B`) | 248,070 | 2,056,155 | 253,266 | 512,632 | 2,822,053 | **68/68**（GrandTotal -20.6%） |
+| Gemma-2 (`gemma-2`) | 256,000 | 2,090,868 | 250,432 | 562,829 | 2,904,129 | **68/68**（GrandTotal -22.8%） |
+| DeepSeek-V3 | 128,815 | 2,340,419 | 231,462 | 503,145 | 3,075,026 | **68/68**（GrandTotal -27.1%） |
+| Inkling-2 | 200,058 | 2,207,167 | 253,578 | 641,070 | 3,101,815 | **68/68**（GrandTotal -27.7%） |
+| Qwen3 (`Qwen3-0.6B`) | 151,669 | 2,656,851 | 248,559 | 475,861 | 3,381,271 | **68/68**（GrandTotal -33.7%） |
+| Qwen2.5 | 151,665 | 2,656,851 | 248,559 | 475,861 | 3,381,271 | **68/68**（GrandTotal -33.7%） |
+| Llama-3 | 128,256 | 2,752,807 | 235,135 | 464,207 | 3,452,149 | **68/68**（GrandTotal -35.1%） |
+| GPT-4 (`cl100k_base`) | 100,277 | 3,272,560 | 235,843 | 464,423 | 3,972,826 | **68/68**（GrandTotal -43.6%） |
 
-- 同一 286MB コーパス条件の比較では、`kototok-Global-Same` が `HF-Global-264k` に対し GrandTotal で -17.6%（478,333 トークン削減）を達成しています。標準 ByteLevel BPE である `HF-Global-264k` は結合記号の分断によりインド系・東南アジア系言語でトークン数が増えるのに対し、kototok の多言語 DFA と階層フォールバック Phase-2 は言語・数式・コードの 3 領域すべてを同時に圧縮します。
-- バランス配分コーパス（780.5MB）で学習した `kototok_global_264k.ktok` は、JA `119,499`（HF `121,978`・o200k `187,516`）、ZH `160,988`（Qwen3.5 `162,710`・HF `167,894`）、KO `86,072`（HF `89,787`・o200k `119,100`）、EN `205,929`（o200k `226,070`・HF `232,744`）、Math `187,040`（DeepSeek-V3 `231,462`・o200k `233,938`）、Python `69,131`（Llama-3 `75,503`・o200k `76,049`）、ベンガル語 `9,226`（Gemma-3 `9,575`）、タイ語 `11,257`（Qwen3.5 `11,361`）を記録し、全 11 外部モデルに対して延べ 748/748 勝（各ドメインの外部最良値に対しても 68/68 全勝）を達成しています。
-- Hugging Face 形式へ書き出した `kototok-Global-264k-HF` は、UTF-8 原子文字の中間バイト列を ByteLevel BPE 語彙として補完するため語彙数が 267,695（+3,197）になりますが、Language 合計は `.ktok` と 0.022% 差（362 トークン差）で一致し、全 68 ドメイン 11.16MB で完全可逆です（外部 11 モデル中 8 モデルに 68/68、`Code-JavaScript` のみ長大な `*` バナー行の分割差で `o200k`・`cl100k`・`Llama-3` に僅差で譲る延べ 745/748 勝）。
-- `kototok_global_264k.ktok` のエンコード速度は `eval/global_68/eval/jpn_Jpan.txt`（702KB）で 1 スレッド 51.11 MB/s（8.70M tokens/s）、8 スレッド 146.38 MB/s（24.92M tokens/s）です。
+- 同一 286MB コーパス条件の比較では、`kototok-Global-Same` が `HF-Global-264k` に対し GrandTotal で -17.6%（478,333 トークン削減）を達成しています。標準 ByteLevel BPE である `HF-Global-264k` や `Custom Global 264,498` は結合記号の分断によりインド系・東南アジア系言語でトークン数が増えるのに対し、kototok の多言語 DFA と階層フォールバック Phase-2 は言語・数式・コードの 3 領域すべてを同時に圧縮します。
+- バランス配分コーパス（799.1MB）で学習した `kototok_global_264k.ktok` は、JA `119,760`（Custom Global `120,185`・o200k `187,516`）、ZH `161,321`（Qwen3.5 `162,710`・Custom Global `164,509`）、KO `86,309`（Custom Global `88,501`・o200k `119,100`）、EN `206,719`（o200k `226,070`・Custom Global `229,307`）、Math `187,367`（DeepSeek-V3 `231,462`・Custom Global `235,700`）、Python `69,237`（Llama-3 `75,503`・Custom Global `86,514`）、ベンガル語 `9,248`（Gemma-3 `9,575`・Custom Global `27,372`）、タイ語 `11,300`（Qwen3.5 `11,361`・Custom Global `20,089`）を記録し、全 12 外部モデルに対して延べ 816/816 勝（各ドメインの外部最良値に対しても 68/68 全勝）を達成しています。
+- Hugging Face 形式へ書き出した `kototok-Global-264k-HF` は、UTF-8 原子文字の中間バイト列を ByteLevel BPE 語彙として補完するため語彙数が 267,691（+3,193）になりますが、Language 合計は `.ktok` と 0.024% 差（398 トークン差）で一致し、全 68 ドメイン 11.16MB で完全可逆です（`Custom Global 264,498` を含む外部 12 モデル中 9 モデルに 68/68、`Code-JavaScript` のみ長大な `*` バナー行の分割差で `o200k`・`cl100k`・`Llama-3` に僅差で譲る延べ 813/816 勝）。
+- `kototok_global_264k.ktok` のエンコード速度は `eval/global_68/eval/jpn_Jpan.txt`（702KB）で 1 スレッド 40.92 MB/s（6.98M tokens/s）、8 スレッド 144.75 MB/s（24.69M tokens/s）であり、全 68 ドメイン 11.16MB 通し実行でも 14.19 MB/s（`Custom Global 264,498` 3.24 MB/s の 4.38 倍）です。
 
 ### 形態素境界と送り仮名保持
 
@@ -331,8 +332,8 @@ tok = Tokenizer.from_file("models/kototok_global_264k_hf/tokenizer.json")
 
 | ファイル | サイズ | 内容 |
 | --- | ---: | --- |
-| `models/kototok_global_264k_hf/` | 14.6MB | `kototok_global_264k` の Hugging Face 形式ディレクトリ（`tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json`、語彙 267,695）。`transformers`・`tokenizers`・vLLM 等からビルド不要で直接読込可能（68 ドメイン完全可逆、外部 11 モデルに 745/748 勝） |
-| `models/kototok_global_264k.ktok` | 39.8MB | 68 ドメイン（58 言語＋数式＋コード 9 言語、780.5MB バランスコーパス）で `--preset global` 学習した多言語フラッグシップモデル。alive vocab 264,498、`invalid_utf8_learned_tokens = 0`、68 ドメイン評価で外部 11 モデルに 748/748（仮想最良比 68/68）全勝 |
+| `models/kototok_global_264k_hf/` | 14.6MB | `kototok_global_264k` の Hugging Face 形式ディレクトリ（`tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json`、語彙 267,691）。`transformers`・`tokenizers`・vLLM 等からビルド不要で直接読込可能（68 ドメイン完全可逆、`Custom Global 264,498` に 68/68・外部 12 モデルに 813/816 勝） |
+| `models/kototok_global_264k.ktok` | 39.8MB | 68 ドメイン（58 言語＋数式＋コード 9 言語、799.1MB バランスコーパス）で `--preset global` 学習した多言語フラッグシップモデル。alive vocab 264,498、`invalid_utf8_learned_tokens = 0`、68 ドメイン評価で `Custom Global 264,498` を含む外部 12 モデルに 816/816（仮想最良比 68/68）全勝 |
 | `models/kototok_v2s_200k.ktok` | 44.7MB | v2 ベース（776MB コーパス・vocab 200k）に複数 refine を適用したポリシー切替モデル。`tag_ranges`（ja/casual/kozh/okuri/okuedge）+ `tagged_prunes`（okuedge 3,482 件）を内蔵し、alive vocab 281,630。`--mode strict`（既定）/ `--tags ja,casual,kozh,okuri`（balanced）を切替可能 |
 | `models/kototok_v2_bko3_200k.ktok` | 41.6MB | 同 v2 ベースに JA/口語の Sudachi gold と KO/ZH の whitespace・jieba gold で Aligned BPE-Knockout（1,328 prune + 64,498 graft、モデル内メタデータ記録の適用 gold は 17,536 文）を施した多言語モデル。alive vocab 264,498 |
 | `models/kototok_s3o_bko2_200k.ktok` | 34.2MB | s3 系ベース（817MB コーパス・vocab 200k）に外科的 BKO2 を適用したモデル（Sudachi holdout 送り仮名保持 94.1%、trigram-LM 1.437 bits/byte） |
@@ -465,7 +466,7 @@ python make_chart.py artifacts_real
 ```bash
 # 68 ドメインの非重複評価セット（11.16MB）と学習コーパスを構築
 eval/.venv/bin/python eval/global_corpus_builder.py --workers 8            # 286MB 同一コーパス対照用
-eval/.venv/bin/python eval/global_corpus_builder.py --balanced --workers 8 # 780.5MB バランス学習用
+eval/.venv/bin/python eval/global_corpus_builder.py --balanced --workers 8 # 799.1MB バランス学習用
 
 # フラッグシップ学習（--preset global、vocab 264,498）
 ./target/release/kototok train --preset global --vocab-size 264498 --threads 4 \
