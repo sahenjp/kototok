@@ -66,57 +66,57 @@ DEFAULT_TRAIN_BYTES_LANG = 2_200_000
 
 # Tier-1 balanced global mixture (strictly disjoint FineWeb-2 train shards; eval/ untouched).
 BALANCED_TRAIN_BYTES_LANG = {
-    "jpn_Jpan": 106_000_000,  # + 8MB jawiki -> 114MB total JA
-    "cmn_Hani": 96_000_000,
-    "kor_Hang": 52_000_000,
-    "ben_Beng": 38_000_000,
-    "tha_Thai": 22_000_000,
-    "hin_Deva": 21_000_000,
-    "rus_Cyrl": 20_000_000,
-    "deu_Latn": 18_000_000,
-    "arb_Arab": 17_000_000,
-    "tam_Taml": 14_000_000,
-    "mar_Deva": 12_000_000,
-    "por_Latn": 12_500_000,
-    "spa_Latn": 12_500_000,
-    "nld_Latn": 11_500_000,
-    "fra_Latn": 11_500_000,
+    "cmn_Hani": 155_000_000,  # ~120MB Simplified + ~35MB Traditional
+    "jpn_Jpan": 142_000_000,  # + 8MB jawiki -> 150MB total JA
+    "kor_Hang": 64_000_000,
+    "ben_Beng": 45_000_000,
+    "tha_Thai": 32_000_000,
+    "hin_Deva": 26_000_000,
+    "rus_Cyrl": 25_000_000,
+    "deu_Latn": 23_000_000,
+    "tam_Taml": 21_500_000,
+    "arb_Arab": 21_000_000,
+    "mar_Deva": 16_000_000,
+    "spa_Latn": 15_500_000,
+    "por_Latn": 15_000_000,
+    "fra_Latn": 14_500_000,
+    "nld_Latn": 14_000_000,
+    "kat_Geor": 11_800_000,
+    "tur_Latn": 11_000_000,
+    "swh_Latn": 10_500_000,
+    "ell_Grek": 10_500_000,
+    "ind_Latn": 10_000_000,
     "ukr_Cyrl": 10_000_000,
-    "kat_Geor": 9_200_000,
+    "ita_Latn": 10_000_000,
+    "ces_Latn": 9_500_000,
     "mkd_Cyrl": 9_000_000,
+    "kaz_Cyrl": 9_000_000,
+    "pol_Latn": 9_000_000,
+    "heb_Hebr": 9_000_000,
+    "lit_Latn": 9_000_000,
     "tel_Telu": 8_500_000,
-    "ita_Latn": 8_000_000,
-    "ell_Grek": 7_500_000,
-    "swh_Latn": 7_500_000,
+    "fas_Arab": 8_500_000,
+    "slk_Latn": 8_500_000,
+    "bos_Latn": 8_500_000,
+    "fin_Latn": 8_500_000,
+    "hun_Latn": 8_000_000,
+    "lvs_Latn": 8_000_000,
+    "azj_Latn": 8_000_000,
+    "ekk_Latn": 7_800_000,
+    "zsm_Latn": 7_500_000,
+    "guj_Gujr": 7_500_000,
+    "vie_Latn": 7_500_000,
+    "mal_Mlym": 7_200_000,
+    "slv_Latn": 7_000_000,
     "als_Latn": 6_800_000,
-    "tur_Latn": 6_800_000,
-    "ces_Latn": 6_800_000,
-    "pol_Latn": 6_800_000,
     "ron_Latn": 6_800_000,
-    "lit_Latn": 6_800_000,
-    "fin_Latn": 6_800_000,
-    "heb_Hebr": 6_500_000,
+    "swe_Latn": 6_800_000,
     "urd_Arab": 6_500_000,
-    "kaz_Cyrl": 6_200_000,
-    "hun_Latn": 5_800_000,
-    "ekk_Latn": 5_800_000,
-    "slk_Latn": 5_800_000,
-    "ind_Latn": 5_800_000,
-    "azj_Latn": 5_800_000,
-    "bos_Latn": 5_800_000,
     "hrv_Latn": 5_800_000,
-    "lvs_Latn": 5_800_000,
-    "fas_Arab": 5_200_000,
-    "zsm_Latn": 5_200_000,
-    "swe_Latn": 5_200_000,
-    "slv_Latn": 5_200_000,
     "npi_Deva": 5_200_000,
     "bul_Cyrl": 5_200_000,
     "srp_Cyrl": 5_000_000,
-    "mal_Mlym": 5_200_000,
-    "guj_Gujr": 5_200_000,
     "kan_Knda": 5_000_000,
-    "vie_Latn": 5_000_000,
     "dan_Latn": 4_800_000,
     "nob_Latn": 4_800_000,
     "cat_Latn": 4_500_000,
@@ -262,7 +262,7 @@ def fetch_fineweb2_lang(
     tr_docs, _ = read_parquet_texts(train_url, tr_target, skip_docs=skip_train)
     # If shard 0 was smaller than tr_target, pull subsequent shards
     shard_idx = 1
-    while sum(len(d.encode()) for d in tr_docs) < tr_target * 0.85 and shard_idx <= 4:
+    while sum(len(d.encode()) for d in tr_docs) < tr_target * 0.85 and shard_idx <= 6:
         try:
             rem = tr_target - sum(len(d.encode()) for d in tr_docs)
             more, _ = read_parquet_texts(f"{base}/train/000_{shard_idx:05d}.parquet", rem)
@@ -272,6 +272,44 @@ def fetch_fineweb2_lang(
             shard_idx += 1
         except Exception:
             break
+    # For large cmn_Hani balanced targets, keep Simplified Chinese dominant (~78%)
+    # while retaining strong Traditional Chinese coverage (~35MB) so both scripts excel.
+    if lang == "cmn_Hani" and tr_target >= 130_000_000:
+        simp_chars = set("这国发经为们时进说还")
+        trad_chars = set("這國發經為們時進說還")
+        trad_cap = 36_000_000
+        kept: list[str] = []
+        trad_bytes = 0
+        kept_bytes = 0
+        for d in tr_docs:
+            b = len(d.encode("utf-8")) + 1
+            sc = sum(1 for c in d[:1000] if c in simp_chars)
+            tc = sum(1 for c in d[:1000] if c in trad_chars)
+            if tc > sc:
+                if trad_bytes < trad_cap:
+                    kept.append(d)
+                    trad_bytes += b
+                    kept_bytes += b
+            else:
+                kept.append(d)
+                kept_bytes += b
+        # Pull extra Simplified-dominant docs from shard 1 if trimming Traditional left room
+        if kept_bytes < tr_target * 0.92:
+            try:
+                more, _ = read_parquet_texts(
+                    f"{base}/train/000_00001.parquet", int((tr_target - kept_bytes) * 1.6)
+                )
+                for d in more:
+                    if kept_bytes >= tr_target:
+                        break
+                    sc = sum(1 for c in d[:1000] if c in simp_chars)
+                    tc = sum(1 for c in d[:1000] if c in trad_chars)
+                    if sc >= tc:
+                        kept.append(d)
+                        kept_bytes += len(d.encode("utf-8")) + 1
+            except Exception:
+                pass
+        tr_docs = kept
     tr_sz = write_docs(tr_path, tr_docs)
     return f"ok {lang} (ev={ev_sz//1024}KB tr={tr_sz//1024}KB)"
 
@@ -341,6 +379,7 @@ def assemble_train_corpus(
     out_file: Path,
     jawiki_extra: Path | None,
     jawiki_bytes: int = 14_000_000,
+    max_bytes_map: dict[str, int] | None = None,
 ) -> int:
     """Concatenate all 68 domain train slices (+ optional jawiki slice) into one training file."""
     tmp = out_file.with_suffix(".txt.tmp")
@@ -348,6 +387,10 @@ def assemble_train_corpus(
     with open(tmp, "wb") as out:
         for p in sorted(train_dir.glob("*.txt")):
             data = p.read_bytes()
+            if max_bytes_map and p.stem in max_bytes_map and len(data) > max_bytes_map[p.stem]:
+                cap = max_bytes_map[p.stem]
+                nl = data.rfind(b"\n", 0, cap)
+                data = data[: nl + 1] if nl > 0 else data[:cap]
             out.write(data)
             if data and not data.endswith(b"\n"):
                 out.write(b"\n")
@@ -422,7 +465,13 @@ def main() -> None:
 
     train_out = args.out_dir / ("train_global_68_balanced.txt" if args.balanced else "train_global_68.txt")
     jawiki_bytes = 8_000_000 if args.balanced else 14_000_000
-    total_train = assemble_train_corpus(train_dir, train_out, args.jawiki, jawiki_bytes=jawiki_bytes)
+    total_train = assemble_train_corpus(
+        train_dir,
+        train_out,
+        args.jawiki,
+        jawiki_bytes=jawiki_bytes,
+        max_bytes_map=train_map if args.balanced else None,
+    )
     total_eval = sum(p.stat().st_size for p in eval_dir.glob("*.txt"))
     print(
         f"DONE in {time.time()-t0:.1f}s: 68 domains built | "

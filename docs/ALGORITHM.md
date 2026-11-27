@@ -252,7 +252,8 @@ Phase 1 では `Kanji -> Hiragana` ペアのスコアを `f(l,r) * NPMI(l,r)^e`�
 ### 6.2 階層フォールバック Phase-2 と省メモリ学習
 
 `phase2_fallback_window = 3` を設定した Phase-2 集計では、最大 16 チャンクのセグメント全体が 2 回以上出現するコード行・数式をそのまま保持する一方、1 回しか出現しない長文セグメントを破棄せず 3 チャンク窓へ分割して反復句を集計する（`crates/kototok-train/src/counter.rs`）。
-トレーナー実装（`crates/kototok-train/src/trainer.rs`）では Phase-1 の終了後に Phase-1 用の作業メモリを解放してから Phase-2 を集計し、シンボル列のインプレース更新と Phase-2 単発ペア事前除外を組み合わせることで、286MB・264k 語彙の学習を 4 スレッド約 36〜50 秒・ピーク RSS 1.86 GiB（スワップ 0 KiB）、780.5MB コーパスを 93.7 秒で完走する。
+また語彙初期化時（`crates/kototok-train/src/vocab_init.rs`）に `seed_unicode_symbols = true`（`global` プリセット既定・語彙予算 16,000 以上）を有効化すると、絵文字・国旗（Regional Indicator）・ZWJ/異体字セレクタ・結合ダイアクリティカルマーク・罫線・数式記号の主要 17 Unicode ブロックを `AtomicChar` として事前確保し、稀な絵文字や Zalgo テキストが 4 個の生 `ByteFallback` トークンへ分解されるのを防ぐ（UTF-8 原子性不変条件 `invalid_utf8_learned_tokens == 0` を保持）。
+トレーナー実装（`crates/kototok-train/src/trainer.rs`）では Phase-1 の終了後に Phase-1 用の作業メモリを解放してから Phase-2 を集計し、シンボル列のインプレース更新と Phase-2 単発ペア事前除外を組み合わせることで、286MB・264k 語彙の学習を 4 スレッド約 36〜50 秒・ピーク RSS 1.86 GiB（スワップ 0 KiB）、1.03GB コーパスを 104.1 秒で完走する。
 
 ### 6.3 汎用 6 形式入出力 (`crates/kototok-core/src/formats/`)
 

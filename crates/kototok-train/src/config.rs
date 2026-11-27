@@ -18,6 +18,9 @@ pub struct TrainConfig {
     pub min_char_freq: u64,
     /// Maximum number of atomic non-ASCII characters admitted during vocabulary init.
     pub max_atomic_chars: Option<usize>,
+    /// Seed core Unicode symbol, emoji, flag, math, and combining-mark blocks as
+    /// guaranteed `AtomicChar` tokens when `vocab_size` has sufficient budget.
+    pub seed_unicode_symbols: bool,
     /// Minimum adjacent pair frequency required for a merge candidate.
     pub min_pair_freq: u64,
     /// ACSG NPMI penalty exponent for `Kanji -> Hiragana` cross pairs (`0.0` disables).
@@ -149,7 +152,8 @@ impl TrainPreset {
                     attach_space_to_punct: true,
                 },
                 min_char_freq: 5,
-                max_atomic_chars: Some(14_000),
+                max_atomic_chars: Some(18_000),
+                seed_unicode_symbols: true,
                 min_pair_freq: 2,
                 acsg_npmi_beta: 0.0,
                 picky_enabled: true,
@@ -189,6 +193,7 @@ impl TrainPreset {
             },
             min_char_freq: 2,
             max_atomic_chars: None,
+            seed_unicode_symbols: false,
             min_pair_freq: 2,
             acsg_npmi_beta: match self {
                 Self::AsymFull | Self::AsymNoPhase2 | Self::AsymNoPicky => 1.0,
@@ -293,7 +298,8 @@ mod tests {
         let global = TrainPreset::Global.config(32_768);
         assert!(global.pretok.multilingual_scripts);
         assert!(global.pretok.attach_space_to_punct);
-        assert_eq!(global.max_atomic_chars, Some(14_000));
+        assert_eq!(global.max_atomic_chars, Some(18_000));
+        assert!(global.seed_unicode_symbols);
         assert_eq!(global.min_segment_freq, 2);
         assert!(global.phase2_non_ja_loose);
         assert_eq!(global.phase1_vocab_ratio, 0.86);
