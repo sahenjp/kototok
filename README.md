@@ -15,6 +15,38 @@ kototok は、日本語・英語・多言語・コード・数式が混在する
 - kototok v2-T（kototok_v2s_200k.ktok）は単一ファイル内にタグ付き層を内蔵し、okuedge 層を含めた strict プロファイルで Sudachi gold 500 文 holdout の境界 F1 0.864・送り仮名保持 88.9%・過結合 0.4% を達成します（独立辞書 UniDic でも境界 F1 0.852・送り仮名 89.0%・過結合 0.5%）。
 - 多言語対応の kototok v2-BKO3（kototok_v2_bko3_200k.ktok）は、bytes/token 基準で JA prose 5.79、Korean 未見 wiki 3.75、Chinese 未見 wiki 4.01 の圧縮率を示し、jawiki 64MiB 上の trigram-LM 代理評価では kototok 5 モデルが上位 7 枠中 5 枠を占めます（最良 1.437 bits/byte、sarashina2 と 0.004 bits/byte 差）。
 
+## クイックスタート
+
+### Rust ビルドなしで使う（Hugging Face `tokenizers` / `transformers`）
+
+フラッグシップの `kototok_global_264k` は、Hugging Face 形式ディレクトリ（`models/kototok_global_264k_hf/`、14.6MB）も同梱しています。Rust や専用拡張をビルドせず、標準の Python ライブラリからそのまま読み込めます。
+
+```python
+from tokenizers import Tokenizer
+
+tok = Tokenizer.from_file("models/kototok_global_264k_hf/tokenizer.json")
+enc = tok.encode("日本語と English と `fn main()` を同時に処理します。")
+print(enc.tokens)
+print(tok.decode(enc.ids))  # 完全可逆ラウンドトリップ
+
+# Hugging Face transformers の場合:
+# from transformers import AutoTokenizer
+# tok = AutoTokenizer.from_pretrained("models/kototok_global_264k_hf")
+```
+
+### `kototok` CLI で学習・変換・エンコードする
+
+```bash
+cargo build --release
+
+# 形式を自動判定してエンコード（.ktok / tokenizer.json / hf-dir / .tiktoken / bpe / .json）
+./target/release/kototok encode --model models/kototok_global_264k.ktok --text "新しいトークナイザー" --pieces
+
+# 任意モデルを Hugging Face / tiktoken / GPT-2 BPE 形式へ書き出し
+./target/release/kototok export --model models/kototok_global_264k.ktok --output out_hf --format hf-dir
+./target/release/kototok export --model models/kototok_global_264k.ktok --output out.tiktoken
+```
+
 ## 手法
 
 ### 非対称 DFA 前処理と UTF-8 原子性
@@ -63,13 +95,23 @@ KO/ZH の学習時混入だけでは未見文の圧縮が 2.88 / 3.49 B/T にと
 
 - 多言語文字種 DFA（`multilingual_scripts`）は、Unicode の結合記号・ゼロ幅接合子（インド系・東南アジア系・アラビア系・ヘブライ系等）や拡張ラテン文字（アゼルバイジャン語の `ə` 等）・ギリシャ文字（`µ` 含む）を文字種ごとにまとめて分断を防ぎ、非 CJK の全アルファベット文字種（節区切り空白を含むタイ語・ラーオ語・ミャンマー語・クメール語等を含む）で単一の先頭 ASCII 空白を後続語へ結合します。
 - コード・数式・多言語向けの句読点処理（`attach_space_to_punct`）は、ASCII 句読点の前後を Phase-2 のソフト境界に保ちつつ、日本語では単語と句読点の境界を封印したまま隣接する日本語約物同士（`。「` や `！！` 等）のみ結合可能にします。
-- 階層フォールバック Phase-2（`phase2_fallback_window = 3`）は、16 チャンク窓で 2 回以上出現するコード行や数式をそのまま保持する一方、1 回しか現れない自然言語文を捨てずに 3 チャンク単位へ分割して反復句を集計します。あわせて Phase-1 と Phase-2 の状態寿命分離、インプレースのシンボル列更新、Phase-2 低頻度ペアの事前除外により、286MB・264k 語彙の学習を 4 スレッド約 36〜50 秒、ピーク RSS 1.86 GiB（スワップ 0 KiB）で完了できます。
+- 階層フォールバック Phase-2（`phase2_fallback_window = 3`）は、16 チャンク窓で 2 回以上出現するコード行や数式をそのまま保持する一方、1 回しか現れない自然言語文を捨てずに 3 チャンク単位へ分割して反復句を集計します。あわせて Phase-1 と Phase-2 の状態寿命分離、インプレースのシンボル列更新、Phase-2 低頻度ペアの事前除外により、264k 語彙の学習を 4 スレッドで 286MB 約 36〜50 秒（ピーク RSS 1.86 GiB・スワップ 0 KiB）、780.5MB コーパスでも 93.7 秒で完了できます。
 
 ### 汎用フォーマット入出力と相互運用
 
-kototok は `.ktok` バイナリのほか、kototok JSON（`json`）、Hugging Face `tokenizer.json`（`hf`）、Hugging Face ディレクトリ（`hf-dir`、`tokenizer.json` / `tokenizer_config.json` / `special_tokens_map.json`）、OpenAI `.tiktoken`（`tiktoken`）、GPT-2 形式（`bpe`、`vocab.json` + `merges.txt`）の全 6 形式に対応します。
-読み込み時はファイル内容またはディレクトリ構成から形式を自動判定し、書き出し時は出力パスから形式を推定します（`--format` で明示指定も可能）。
-Hugging Face 形式への書き出しでは PickyBPE の剪定済み祖先を補完して密な語彙 ID（`0..V-1`）を出力し、`pre_tokenizer` 設定には `AsymScript`・`StrictScript`・`StandardGpt` と `global` 拡張フラグを反映するため、Hugging Face `tokenizers` ランタイムおよび kototok 再読込の両方で動作を再現できます。
+kototok は独自バイナリの `.ktok` に限らず、主要なトークナイザー形式を含む全 6 形式の読み込み・書き出しに対応します。
+読み込み時はファイル内容やディレクトリ構成から形式を自動判定し、書き出し時は出力パスから形式を推定します（CLI の `--format` や Python の `format=` で明示指定も可能）。
+
+| 形式指定 | 代表ファイル・構成 | 読込 / 書出 | 外部ランタイム互換性と特徴 |
+| --- | --- | :---: | --- |
+| `ktok` | `*.ktok` | ○ / ○ | kototok 標準バイナリ。PickyBPE 剪定履歴・タグ付き外科層（`tag_ranges` / `tagged_prunes`）を完全保持 |
+| `json` | `*.json`（kototok スキーマ） | ○ / ○ | `ktok` と等価な JSON 表現。差分確認やモデル検査向け |
+| `hf` | `tokenizer.json` | ○ / ○ | Hugging Face `tokenizers` 互換。剪定済み祖先を補完した密 ID（`0..V-1`）と多言語 `pre_tokenizer` 正規表現を出力 |
+| `hf-dir` | `tokenizer.json` + `tokenizer_config.json` + `special_tokens_map.json` | ○ / ○ | `transformers`（`AutoTokenizer.from_pretrained`）・vLLM 等から Rust ビルドなしで直接読込可能（標準配布推奨） |
+| `tiktoken` | `*.tiktoken` | ○ / ○ | OpenAI `tiktoken` 形式（base64 + rank）。仕様上 `pre_tokenizer` 正規表現を持たず、kototok での読込時は標準 GPT モードとして扱う |
+| `bpe` | `vocab.json` + `merges.txt` | ○ / ○ | GPT-2 互換の ByteLevel BPE 2 ファイル形式 |
+
+Hugging Face 形式（`hf` / `hf-dir`）の書き出しでは `pre_tokenizer` 設定に `AsymScript`・`StrictScript`・`StandardGpt` と `global` 拡張フラグを反映するため、Hugging Face `tokenizers` ランタイムおよび kototok 再読込の両方で動作を再現できます。
 
 ## 評価
 
@@ -305,7 +347,7 @@ tok = Tokenizer.from_file("models/kototok_global_264k_hf/tokenizer.json")
 整合性チェックは同梱の `models/SHA256SUMS.txt` で検証できます。
 
 ```bash
-sha256sum -c models/SHA256SUMS.txt
+(cd models && sha256sum -c SHA256SUMS.txt)
 ```
 
 ## 再現手順
@@ -434,7 +476,8 @@ eval/.venv/bin/python eval/global_bench.py \
   --model "GPT-4o (o200k)=tiktoken:o200k_base" \
   --model "GPT-4 (cl100k)=tiktoken:cl100k_base" \
   --model "HF-Global-264k=hf:eval/global_68/hf_global_264k.json" \
-  --model "kototok-Global-264k=ktok:models/kototok_global_264k.ktok"
+  --model "kototok-Global-264k=ktok:models/kototok_global_264k.ktok" \
+  --model "kototok-Global-264k-HF=hf:models/kototok_global_264k_hf/tokenizer.json"
 ```
 
 ## 制約と今後の課題

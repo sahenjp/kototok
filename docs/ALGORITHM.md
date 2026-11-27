@@ -218,6 +218,7 @@ Phase 1 では `Kanji -> Hiragana` ペアのスコアを `f(l,r) * NPMI(l,r)^e`�
 | `asym-no-acsg` | `AsymScript` | `Utf8Atomic` | OFF | ON | ON | ACSG による名詞＋助詞過結合の抑制効果 |
 | `strict-script` | `StrictScript` | `Utf8Atomic` | OFF | OFF | OFF | 厳格文字種分割の送り仮名分断への影響 |
 | `standard-bbpe` | `StandardGpt` | `RawBytes` | OFF | OFF | OFF | 従来の標準 Byte-level BPE 対照群 |
+| `global` | `AsymScript` + 多言語拡張 | `Utf8Atomic` | ON | ON | ON（16→3 階層） | 68 ドメイン多言語・数式・コード向け構成 |
 
 加えて外部比較対象として、同一コーパス・同一語彙サイズで訓練した HuggingFace `tokenizers` の `hf-bpe` (ByteLevel BPE) と `hf-unigram` (Unigram)、ならびに大規模外部基準として `tiktoken` (`cl100k_base`, `o200k_base`) を併記する。
 
@@ -231,3 +232,29 @@ Phase 1 では `Kanji -> Hiragana` ペアのスコアを `f(l,r) * NPMI(l,r)^e`�
    - **Noun+Particle Over-Merge Rate (%)**: タグ付けされた「名詞＋助詞」境界 $m$（例: `日本\|の`, `開発者\|が`）が予測境界 $B_{\text{pred}}$ から欠落し、1 トークンへ結合されてしまった割合（低いほど良好）。
 4. **死蔵トークン率 (`Dead Token Rate %`)**: 結合済みテストコーパス全体を通して一度も出現しない語彙トークンが `vocab_size` に占める割合。
 5. **処理速度と $O(N)$ 耐性**: `test_ja_prose.txt` に対するシングルスレッド処理スループット (`MB/s`) と、`adversarial_1mb.txt`（1MB 連続同一文字を含む敵対的入力）のエンコード遅延 (`ms`)。
+
+---
+
+## 6. 多言語 `global` 拡張・階層フォールバック Phase-2・汎用 6 形式入出力
+
+### 6.1 多言語文字種 DFA と句読点境界 (`global` プリセット)
+
+68 ドメイン多言語・数式・コード向けの `global` プリセットは、`PreTokenizerConfig` に次の 2 フラグを有効化する（実装: `crates/kototok-core/src/script.rs`, `pretok.rs`）。
+
+1. **多言語文字種統合 (`multilingual_scripts = true`)**:
+   - 57 言語の非 CJK 文字をスクリプト群ごとに分類し、Unicode の結合記号（`Mn` / `Mc`）およびゼロ幅接合子（`U+200C`, `U+200D`）を直前の基底文字と同一チャンクに維持してインド系・東南アジア系・アラビア系・ヘブライ系文字の分断を防ぐ。
+   - 拡張ラテン文字（`U+0250..=U+02AF` の `ə` 等）およびギリシャ文字（`U+00B5` 含む）をそれぞれのスクリプト群に含める。
+   - 非 CJK の全アルファベット文字種（節区切り空白を含むタイ語・ラーオ語・ミャンマー語・クメール語を含む）について、単一の先頭 ASCII 空白（`' '`）を後続語へ結合する。
+2. **句読点ソフト境界拡張 (`attach_space_to_punct = true`)**:
+   - ASCII 句読点の前後を Phase-2 のソフト境界として扱い、数式・コード・英語の多文字記号結合を許可する。
+   - 日本語では単語と `JaPunct` の境界をハードのまま維持しつつ、隣接する `JaPunct` 同士（例: `。「`, `！！`）の間のみソフト境界とする。
+
+### 6.2 階層フォールバック Phase-2 と省メモリ学習
+
+`phase2_fallback_window = 3` を設定した Phase-2 集計では、最大 16 チャンクのセグメント全体が 2 回以上出現するコード行・数式をそのまま保持する一方、1 回しか出現しない長文セグメントを破棄せず 3 チャンク窓へ分割して反復句を集計する（`crates/kototok-train/src/counter.rs`）。
+トレーナー実装（`crates/kototok-train/src/trainer.rs`）では Phase-1 の終了後に Phase-1 用の作業メモリを解放してから Phase-2 を集計し、シンボル列のインプレース更新と Phase-2 単発ペア事前除外を組み合わせることで、286MB・264k 語彙の学習を 4 スレッド約 36〜50 秒・ピーク RSS 1.86 GiB（スワップ 0 KiB）、780.5MB コーパスを 93.7 秒で完走する。
+
+### 6.3 汎用 6 形式入出力 (`crates/kototok-core/src/formats/`)
+
+`Model::load_auto` / `Model::save_auto` は、`.ktok`・kototok JSON（`json`）・Hugging Face `tokenizer.json`（`hf`）・Hugging Face ディレクトリ（`hf-dir`）・OpenAI `.tiktoken`（`tiktoken`）・GPT-2 形式（`bpe`）の 6 形式を統一的に扱う。
+Hugging Face 形式の書き出しでは、UTF-8 原子文字の中間バイト列と PickyBPE 剪定済み祖先を ByteLevel BPE 語彙として補完し、密な ID 空間（`0..V-1`）および `AsymScript` / `StrictScript` / `StandardGpt` + `global` フラグを反映した `pre_tokenizer` 正規表現を出力する。これにより、Hugging Face `tokenizers` ランタイムと kototok 再読込の双方で完全可逆エンコードを再現できる。
